@@ -5,98 +5,83 @@ import threading
 import time
 
 # --- Constants ---
-HUMAN = 'X'
-AI = 'O'
+PLAYER_X = 'X'
+PLAYER_O = 'O'
 EMPTY = ' '
 WIN_SCORE = 1000
 LOSE_SCORE = -1000
-MAX_DEPTH = 5 
 
 # ==========================================
-# GAME LOGIC CLASS (Backend)
+# GAME LOGIC CLASS (Dynamic Size N x N)
 # ==========================================
 class TicTacToeFIFO:
-    def __init__(self):
-        self.board = [EMPTY] * 9
-        # Track the order of moves for each player: [oldest, middle, newest]
-        self.move_queues = {HUMAN: [], AI: []}
+    def __init__(self, n):
+        self.n = n  # Grid size (3, 4, or 5)
+        self.board = [EMPTY] * (n * n)
+        # Track moves: [oldest, ..., newest]
+        self.move_queues = {PLAYER_X: [], PLAYER_O: []}
 
     def check_winner(self, player):
-        win_conditions = [
-            (0, 1, 2), (3, 4, 5), (6, 7, 8),
-            (0, 3, 6), (1, 4, 7), (2, 5, 8),
-            (0, 4, 8), (2, 4, 6)
-        ]
-        return any(self.board[a] == self.board[b] == self.board[c] == player 
-                   for a, b, c in win_conditions)
+        n = self.n
+        b = self.board
+        
+        # Check Rows
+        for r in range(n):
+            if all(b[r * n + c] == player for c in range(n)): return True
+        
+        # Check Columns
+        for c in range(n):
+            if all(b[r * n + c] == player for r in range(n)): return True
+            
+        # Check Diagonals
+        if all(b[i * n + i] == player for i in range(n)): return True
+        if all(b[i * n + (n - 1 - i)] == player for i in range(n)): return True
+        
+        return False
 
     def evaluate(self):
-        if self.check_winner(AI): return WIN_SCORE
-        if self.check_winner(HUMAN): return LOSE_SCORE
-        
-        score = 0
-        # Simple Heuristic: Center is valuable
-        if self.board[4] == AI: score += 5
-        elif self.board[4] == HUMAN: score -= 5
-        return score
+        if self.check_winner(PLAYER_O): return WIN_SCORE
+        if self.check_winner(PLAYER_X): return LOSE_SCORE
+        return 0
 
     def get_possible_moves(self):
-        # In FIFO mode, you can always play in any currently empty spot.
-        # You cannot play on your own piece even if it's about to be removed.
         return [i for i, x in enumerate(self.board) if x == EMPTY]
 
     def make_move(self, pos, player):
-        """
-        Places a piece. If > 3 pieces, removes the oldest.
-        Returns the index of the removed piece (or None) to allow undoing.
-        """
         removed_pos = None
-        
-        # 1. Place new piece
         self.board[pos] = player
         self.move_queues[player].append(pos)
         
-        # 2. Check limit (FIFO removal)
-        if len(self.move_queues[player]) > 3:
-            removed_pos = self.move_queues[player].pop(0) # Remove oldest
+        # FIFO Logic: Limit is N (e.g., 3 for 3x3, 4 for 4x4)
+        if len(self.move_queues[player]) > self.n:
+            removed_pos = self.move_queues[player].pop(0)
             self.board[removed_pos] = EMPTY
             
         return removed_pos
 
     def undo_move(self, pos, player, removed_pos):
-        """
-        Reverses a move. Requires knowing which piece was auto-removed.
-        """
-        # 1. Remove the piece that was just added
         self.board[pos] = EMPTY
-        self.move_queues[player].pop() # Remove newest
+        self.move_queues[player].pop()
         
-        # 2. Restore the piece that was auto-removed (if any)
         if removed_pos is not None:
             self.board[removed_pos] = player
-            self.move_queues[player].insert(0, removed_pos) # Put back at start of queue
+            self.move_queues[player].insert(0, removed_pos)
 
-    def minimax(self, depth, is_maximizing, alpha, beta):
+    def minimax(self, depth, is_maximizing, alpha, beta, max_depth):
         score = self.evaluate()
         if score == WIN_SCORE: return score - depth
         if score == LOSE_SCORE: return score + depth
-        if depth >= MAX_DEPTH: return score
+        if depth >= max_depth: return score
 
         moves = self.get_possible_moves()
-        
-        # If board is somehow full (unlikely in FIFO but possible in standard), draw
         if not moves: return 0
 
         if is_maximizing:
             best_val = -math.inf
             for move in moves:
-                # Store removed_pos so we can undo correctly
-                removed_pos = self.make_move(move, AI)
-                
-                val = self.minimax(depth + 1, False, alpha, beta)
-                
-                self.undo_move(move, AI, removed_pos)
-                
+                removed_pos = self.make_move(move, PLAYER_O)
+                val = self.minimax(depth + 1, False, alpha, beta, max_depth)
+                self.undo_move(move, PLAYER_O, removed_pos)
                 best_val = max(best_val, val)
                 alpha = max(alpha, best_val)
                 if beta <= alpha: break
@@ -104,12 +89,9 @@ class TicTacToeFIFO:
         else:
             best_val = math.inf
             for move in moves:
-                removed_pos = self.make_move(move, HUMAN)
-                
-                val = self.minimax(depth + 1, True, alpha, beta)
-                
-                self.undo_move(move, HUMAN, removed_pos)
-                
+                removed_pos = self.make_move(move, PLAYER_X)
+                val = self.minimax(depth + 1, True, alpha, beta, max_depth)
+                self.undo_move(move, PLAYER_X, removed_pos)
                 best_val = min(best_val, val)
                 beta = min(beta, best_val)
                 if beta <= alpha: break
@@ -120,10 +102,14 @@ class TicTacToeFIFO:
         best_move = None
         moves = self.get_possible_moves()
         
+        # Adjust depth based on board size to prevent lag
+        # 3x3 -> Depth 5, 4x4 -> Depth 3, 5x5 -> Depth 2
+        dynamic_depth = 5 if self.n == 3 else (3 if self.n == 4 else 2)
+        
         for move in moves:
-            removed_pos = self.make_move(move, AI)
-            move_val = self.minimax(0, False, -math.inf, math.inf)
-            self.undo_move(move, AI, removed_pos)
+            removed_pos = self.make_move(move, PLAYER_O)
+            move_val = self.minimax(0, False, -math.inf, math.inf, dynamic_depth)
+            self.undo_move(move, PLAYER_O, removed_pos)
             
             if move_val > best_val:
                 best_val = move_val
@@ -131,109 +117,195 @@ class TicTacToeFIFO:
         return best_move
 
 # ==========================================
-# GUI CLASS (Frontend)
+# GUI CLASS
 # ==========================================
 class TicTacToeGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("FIFO Tic-Tac-Toe (Auto-Remove Oldest)")
-        self.game = TicTacToeFIFO()
+        self.root.title("Advanced Tic-Tac-Toe")
         
-        self.current_turn = HUMAN
+        # State Variables
+        self.n = 3             # Default Grid Size
+        self.game_mode = 'AI'  # Default Mode
+        self.game = None
+        self.current_turn = PLAYER_X
         self.game_over = False
         self.buttons = []
+
+        # Frames
+        self.size_frame = tk.Frame(self.root)
+        self.mode_frame = tk.Frame(self.root)
+        self.game_frame = tk.Frame(self.root)
+
+        # Start Flow
+        self.setup_size_screen()
+        self.setup_mode_screen()
+        # Game board is setup dynamically later
         
-        self.setup_gui()
+        self.show_size_screen()
 
-    def setup_gui(self):
-        board_frame = tk.Frame(self.root)
-        board_frame.pack(pady=20)
+    # --- SCREEN 1: SIZE SELECTION ---
+    def setup_size_screen(self):
+        lbl = tk.Label(self.size_frame, text="Select Grid Size", font=('Arial', 20, 'bold'))
+        lbl.pack(pady=30)
+        
+        sizes = [3, 4, 5]
+        for s in sizes:
+            btn = tk.Button(self.size_frame, text=f"{s} x {s}", font=('Arial', 14), width=20,
+                            command=lambda val=s: self.select_size(val))
+            btn.pack(pady=10)
 
-        for i in range(9):
-            btn = tk.Button(board_frame, text=EMPTY, font=('Arial', 24, 'bold'), 
-                            width=5, height=2,
+    def select_size(self, size):
+        self.n = size
+        self.size_frame.pack_forget()
+        self.mode_frame.pack(fill='both', expand=True)
+        # Update window size based on grid
+        dims = {3: "400x500", 4: "500x600", 5: "600x700"}
+        self.root.geometry(dims.get(size, "400x500"))
+
+    # --- SCREEN 2: MODE SELECTION ---
+    def setup_mode_screen(self):
+        lbl = tk.Label(self.mode_frame, text="Select Game Mode", font=('Arial', 20, 'bold'))
+        lbl.pack(pady=30)
+        
+        btn_ai = tk.Button(self.mode_frame, text="Play vs AI", font=('Arial', 14), width=20,
+                           command=lambda: self.start_game('AI'))
+        btn_ai.pack(pady=10)
+        
+        btn_pvp = tk.Button(self.mode_frame, text="2 Player (PvP)", font=('Arial', 14), width=20,
+                            command=lambda: self.start_game('PvP'))
+        btn_pvp.pack(pady=10)
+        
+        btn_back = tk.Button(self.mode_frame, text="Back", command=self.show_size_screen)
+        btn_back.pack(pady=20)
+
+    def show_size_screen(self):
+        self.mode_frame.pack_forget()
+        self.game_frame.pack_forget()
+        self.size_frame.pack(fill='both', expand=True)
+        self.root.geometry("400x450")
+
+    # --- SCREEN 3: GAME BOARD ---
+    def start_game(self, mode):
+        self.game_mode = mode
+        self.mode_frame.pack_forget()
+        self.game_frame.pack(fill='both', expand=True)
+        
+        # Initialize Logic
+        self.game = TicTacToeFIFO(self.n)
+        self.current_turn = PLAYER_X
+        self.game_over = False
+        
+        # Build UI
+        for widget in self.game_frame.winfo_children():
+            widget.destroy()
+            
+        self.build_game_ui()
+        self.update_status_text()
+
+    def build_game_ui(self):
+        top_lbl = tk.Label(self.game_frame, text=f"Match: {self.n}x{self.n} ({self.game_mode})", font=('Arial', 12))
+        top_lbl.pack(pady=10)
+
+        grid_frame = tk.Frame(self.game_frame)
+        grid_frame.pack(pady=10)
+        
+        self.buttons = []
+        for i in range(self.n * self.n):
+            btn = tk.Button(grid_frame, text=EMPTY, font=('Arial', 18, 'bold'), 
+                            width=4, height=2,
                             command=lambda idx=i: self.handle_click(idx))
-            row = i // 3
-            col = i % 3
-            btn.grid(row=row, column=col, padx=5, pady=5)
+            row = i // self.n
+            col = i % self.n
+            btn.grid(row=row, column=col, padx=3, pady=3)
             self.buttons.append(btn)
 
-        self.status_label = tk.Label(self.root, text="Your Turn (X)", font=('Arial', 14))
+        self.status_label = tk.Label(self.game_frame, text="", font=('Arial', 14))
         self.status_label.pack(pady=10)
 
-        reset_btn = tk.Button(self.root, text="Restart Game", command=self.reset_game)
-        reset_btn.pack(pady=5)
+        # Bottom Controls
+        btn_frame = tk.Frame(self.game_frame)
+        btn_frame.pack(pady=10)
         
-        instructions = tk.Label(self.root, text="Note: When you place a 4th piece,\nyour oldest piece is automatically removed.", fg="gray")
-        instructions.pack(pady=10)
+        tk.Button(btn_frame, text="Restart", command=lambda: self.start_game(self.game_mode)).pack(side='left', padx=10)
+        tk.Button(btn_frame, text="Main Menu", command=self.show_size_screen).pack(side='left', padx=10)
+        
+        rule_lbl = tk.Label(self.game_frame, text=f"Note: Max {self.n} pieces allowed per player.\nOldest removes on {self.n+1}th move.", fg="gray")
+        rule_lbl.pack(pady=5)
 
     def update_gui_board(self):
-        # Update text and colors
         for i, mark in enumerate(self.game.board):
-            self.buttons[i].config(text=mark, bg="SystemButtonFace") # Reset bg
-            if mark == HUMAN:
-                self.buttons[i].config(fg="blue")
-            elif mark == AI:
-                self.buttons[i].config(fg="red")
-            else:
-                self.buttons[i].config(fg="black")
+            self.buttons[i].config(text=mark, bg="SystemButtonFace")
+            if mark == PLAYER_X: self.buttons[i].config(fg="blue")
+            elif mark == PLAYER_O: self.buttons[i].config(fg="red")
+            else: self.buttons[i].config(fg="black")
 
-        # Highlight the oldest piece (the one about to die) if 3 exist
-        if len(self.game.move_queues[HUMAN]) == 3:
-            oldest = self.game.move_queues[HUMAN][0]
-            self.buttons[oldest].config(bg="#ffcccb") # Light red warning
+        # Highlight oldest piece
+        current_queue = self.game.move_queues[self.current_turn]
+        if len(current_queue) == self.n and not self.game_over:
+            oldest = current_queue[0]
+            self.buttons[oldest].config(bg="#ffcccb")
+
+    def update_status_text(self):
+        if self.game_over: return
+        if self.game_mode == 'AI' and self.current_turn == PLAYER_O:
+            self.status_label.config(text="AI is thinking...")
+        else:
+            p_name = "Player 1 (X)" if self.current_turn == PLAYER_X else "Player 2 (O)"
+            self.status_label.config(text=f"{p_name}'s Turn")
 
     def handle_click(self, index):
-        if self.game_over or self.current_turn != HUMAN: return
+        if self.game_over: return
+        if self.game_mode == 'AI' and self.current_turn == PLAYER_O: return
         
-        # In FIFO, you can only click empty spots
         if self.game.board[index] != EMPTY:
-            messagebox.showwarning("Invalid Move", "You must click an empty spot.")
+            messagebox.showwarning("Invalid", "Spot taken!")
             return
 
-        # Execute Human Move
-        self.game.make_move(index, HUMAN)
+        self.execute_move(index, self.current_turn)
+
+        if self.check_win(self.current_turn): return
+        
+        self.toggle_turn()
         self.update_gui_board()
-        
-        if self.check_end_condition(HUMAN): return
+        self.update_status_text()
 
-        # Trigger AI
-        self.current_turn = AI
-        self.status_label.config(text="AI is thinking...")
-        threading.Thread(target=self.ai_turn_thread, daemon=True).start()
+        if self.game_mode == 'AI' and self.current_turn == PLAYER_O:
+            threading.Thread(target=self.ai_move_thread, daemon=True).start()
 
-    def ai_turn_thread(self):
-        time.sleep(0.6) # UX delay
+    def ai_move_thread(self):
+        time.sleep(0.5)
         best_move = self.game.find_best_move()
-        self.root.after(0, lambda: self.execute_ai_move(best_move))
+        self.root.after(0, lambda: self.finish_ai_move(best_move))
 
-    def execute_ai_move(self, move):
+    def finish_ai_move(self, move):
         if move is not None:
-            self.game.make_move(move, AI)
-            self.update_gui_board()
-            if self.check_end_condition(AI): return
-        
-        self.current_turn = HUMAN
-        self.status_label.config(text="Your Turn (X)")
+            self.execute_move(move, PLAYER_O)
+            if self.check_win(PLAYER_O): return
+            
+        self.toggle_turn()
+        self.update_gui_board()
+        self.update_status_text()
 
-    def check_end_condition(self, player):
+    def execute_move(self, index, player):
+        self.game.make_move(index, player)
+        self.update_gui_board()
+
+    def toggle_turn(self):
+        self.current_turn = PLAYER_O if self.current_turn == PLAYER_X else PLAYER_X
+
+    def check_win(self, player):
         if self.game.check_winner(player):
             self.game_over = True
-            winner = "You Win!" if player == HUMAN else "AI Wins!"
-            self.status_label.config(text=winner)
-            messagebox.showinfo("Game Over", winner)
+            msg = "You Win!" if player == PLAYER_X and self.game_mode == 'AI' else \
+                  ("AI Wins!" if player == PLAYER_O and self.game_mode == 'AI' else \
+                  (f"{player} Wins!"))
+            self.status_label.config(text=msg)
+            messagebox.showinfo("Game Over", msg)
             return True
         return False
 
-    def reset_game(self):
-        self.game = TicTacToeFIFO()
-        self.current_turn = HUMAN
-        self.game_over = False
-        self.update_gui_board()
-        self.status_label.config(text="Your Turn (X)")
-
 if __name__ == "__main__":
     root = tk.Tk()
-    gui = TicTacToeGUI(root)
-    root.geometry("400x500")
+    app = TicTacToeGUI(root)
     root.mainloop()
