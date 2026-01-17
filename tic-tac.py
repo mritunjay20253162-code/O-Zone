@@ -1,364 +1,472 @@
 import tkinter as tk
-from tkinter import messagebox
-import math
+from tkinter import messagebox, simpledialog
+import socket
 import threading
 import time
+import math
 
 # --- Constants ---
 PLAYER_X = 'X'
 PLAYER_O = 'O'
 EMPTY = ' '
-WIN_SCORE = 1000
-LOSE_SCORE = -1000
 
 # ==========================================
-# GAME LOGIC CLASS (FIFO Rule + Dynamic Size)
+# 1. UNIVERSAL GAME LOGIC (2D Only)
 # ==========================================
-class TicTacToeFIFO:
+class GameLogic:
     def __init__(self, n):
         self.n = n
-        self.board = [EMPTY] * (n * n)
+        self.total_cells = n * n
+        self.board = [EMPTY] * self.total_cells
         self.move_queues = {PLAYER_X: [], PLAYER_O: []}
 
     def check_winner(self, player):
         n = self.n
         b = self.board
-        
-        # Check Rows
+        # Rows
         for r in range(n):
-            if all(b[r * n + c] == player for c in range(n)): return True
-        
-        # Check Columns
+            if all(b[r*n + c] == player for c in range(n)): return True
+        # Columns
         for c in range(n):
-            if all(b[r * n + c] == player for r in range(n)): return True
-            
-        # Check Diagonals
-        if all(b[i * n + i] == player for i in range(n)): return True
-        if all(b[i * n + (n - 1 - i)] == player for i in range(n)): return True
-        
+            if all(b[r*n + c] == player for r in range(n)): return True
+        # Diagonals
+        if all(b[i*n + i] == player for i in range(n)): return True
+        if all(b[i*n + (n-1-i)] == player for i in range(n)): return True
         return False
 
-    def evaluate(self):
-        if self.check_winner(PLAYER_O): return WIN_SCORE
-        if self.check_winner(PLAYER_X): return LOSE_SCORE
-        return 0
-
-    def get_possible_moves(self):
-        return [i for i, x in enumerate(self.board) if x == EMPTY]
-
     def make_move(self, pos, player):
-        removed_pos = None
         self.board[pos] = player
         self.move_queues[player].append(pos)
-        
+        removed = None
+        # FIFO Rule: Max pieces = N (e.g., 3 for 3x3)
         if len(self.move_queues[player]) > self.n:
-            removed_pos = self.move_queues[player].pop(0)
-            self.board[removed_pos] = EMPTY
-            
-        return removed_pos
+            removed = self.move_queues[player].pop(0)
+            self.board[removed] = EMPTY
+        return removed
 
-    def undo_move(self, pos, player, removed_pos):
+    def undo_move(self, pos, player, removed):
         self.board[pos] = EMPTY
         self.move_queues[player].pop()
-        
-        if removed_pos is not None:
-            self.board[removed_pos] = player
-            self.move_queues[player].insert(0, removed_pos)
+        if removed is not None:
+            self.board[removed] = player
+            self.move_queues[player].insert(0, removed)
 
-    def minimax(self, depth, is_maximizing, alpha, beta, max_depth):
-        score = self.evaluate()
-        if score == WIN_SCORE: return score - depth
-        if score == LOSE_SCORE: return score + depth
-        if depth >= max_depth: return score
+    def get_valid_moves(self):
+        return [i for i, x in enumerate(self.board) if x == EMPTY]
 
-        moves = self.get_possible_moves()
-        if not moves: return 0
-
-        if is_maximizing:
-            best_val = -math.inf
-            for move in moves:
-                removed_pos = self.make_move(move, PLAYER_O)
-                val = self.minimax(depth + 1, False, alpha, beta, max_depth)
-                self.undo_move(move, PLAYER_O, removed_pos)
-                best_val = max(best_val, val)
-                alpha = max(alpha, best_val)
-                if beta <= alpha: break
-            return best_val
-        else:
-            best_val = math.inf
-            for move in moves:
-                removed_pos = self.make_move(move, PLAYER_X)
-                val = self.minimax(depth + 1, True, alpha, beta, max_depth)
-                self.undo_move(move, PLAYER_X, removed_pos)
-                best_val = min(best_val, val)
-                beta = min(beta, best_val)
-                if beta <= alpha: break
-            return best_val
-
-    def find_best_move(self):
+    # --- Minimax for AI (Offline) ---
+    def best_move_ai(self):
         best_val = -math.inf
         best_move = None
-        moves = self.get_possible_moves()
+        # Depth adjustment: 5 for 3x3, 3 for 4x4, 2 for 5x5 (to prevent lag)
+        depth_limit = 5 if self.n == 3 else (3 if self.n == 4 else 2)
         
-        # Depth logic: 3x3->5, 4x4->3, 5x5->2
-        dynamic_depth = 5 if self.n == 3 else (3 if self.n == 4 else 2)
-        
-        for move in moves:
-            removed_pos = self.make_move(move, PLAYER_O)
-            move_val = self.minimax(0, False, -math.inf, math.inf, dynamic_depth)
-            self.undo_move(move, PLAYER_O, removed_pos)
-            
-            if move_val > best_val:
-                best_val = move_val
+        for move in self.get_valid_moves():
+            rem = self.make_move(move, PLAYER_O)
+            val = self.minimax(0, False, -math.inf, math.inf, depth_limit)
+            self.undo_move(move, PLAYER_O, rem)
+            if val > best_val:
+                best_val = val
                 best_move = move
         return best_move
 
+    def minimax(self, d, is_max, alpha, beta, max_d):
+        if self.check_winner(PLAYER_O): return 1000 - d
+        if self.check_winner(PLAYER_X): return -1000 + d
+        if d >= max_d: return 0
+        
+        moves = self.get_valid_moves()
+        if not moves: return 0
+
+        if is_max:
+            max_eval = -math.inf
+            for move in moves:
+                rem = self.make_move(move, PLAYER_O)
+                eval = self.minimax(d+1, False, alpha, beta, max_d)
+                self.undo_move(move, PLAYER_O, rem)
+                max_eval = max(max_eval, eval)
+                alpha = max(alpha, eval)
+                if beta <= alpha: break
+            return max_eval
+        else:
+            min_eval = math.inf
+            for move in moves:
+                rem = self.make_move(move, PLAYER_X)
+                eval = self.minimax(d+1, True, alpha, beta, max_d)
+                self.undo_move(move, PLAYER_X, rem)
+                min_eval = min(min_eval, eval)
+                beta = min(beta, eval)
+                if beta <= alpha: break
+            return min_eval
+
 # ==========================================
-# GUI CLASS
+# 2. MAIN APP (GUI + Flow Control)
 # ==========================================
-class TicTacToeGUI:
+class AllInOneApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Advanced Tic-Tac-Toe")
+        self.root.title("Ultimate Tic-Tac-Toe (2D Only)")
+        self.root.geometry("500x600")
         
-        # Variables
-        self.n = 3
-        self.game_mode = 'AI'
+        # --- State Variables ---
+        self.mode = None       # 'OFFLINE' or 'ONLINE'
+        self.game = None
+        self.socket = None
+        self.is_host = False   # True if Host
+        self.my_role = PLAYER_X # Default
         self.p1_name = "Player 1"
         self.p2_name = "Player 2"
+        self.turn_lock = False # For online turns
+        self.n = 3
         
-        self.game = None
-        self.current_turn = PLAYER_X
-        self.game_over = False
-        self.buttons = []
+        # --- UI Frames ---
+        # Note: 'Off_Dim' removed
+        self.frames = {}
+        for f in ["MainMenu", "Off_Size", "Off_Mode", "NameEntry", "Online_Menu", "Online_Wait", "Game"]:
+            self.frames[f] = tk.Frame(root)
+            
+        self.show_frame("MainMenu")
+        self.setup_main_menu()
 
-        # Frames
-        self.size_frame = tk.Frame(self.root)
-        self.mode_frame = tk.Frame(self.root)
-        self.name_frame = tk.Frame(self.root) # New Frame for Names
-        self.game_frame = tk.Frame(self.root)
+    def hide_all(self):
+        for f in self.frames.values():
+            f.pack_forget()
 
-        # Start Flow
-        self.setup_size_screen()
-        self.setup_mode_screen()
-        # Name screen is dynamic, setup later
+    def show_frame(self, name):
+        self.hide_all()
+        self.frames[name].pack(fill='both', expand=True)
+
+    # ==========================
+    # SCREEN 1: MAIN MENU
+    # ==========================
+    def setup_main_menu(self):
+        f = self.frames["MainMenu"]
+        for w in f.winfo_children(): w.destroy()
         
-        self.show_size_screen()
+        tk.Label(f, text="Tic-Tac-Toe Master\n(FIFO Mode)", font=("Arial", 24, "bold")).pack(pady=40)
+        tk.Button(f, text="Play Offline", font=("Arial", 16), width=20, 
+                  command=self.start_offline_flow).pack(pady=10)
+        tk.Button(f, text="Play Online", font=("Arial", 16), width=20, 
+                  command=self.start_online_flow).pack(pady=10)
 
-    # --- SCREEN 1: SIZE ---
-    def setup_size_screen(self):
-        lbl = tk.Label(self.size_frame, text="Select Grid Size", font=('Arial', 20, 'bold'))
-        lbl.pack(pady=30)
+    # ==========================
+    # OFFLINE FLOW
+    # ==========================
+    def start_offline_flow(self):
+        self.mode = 'OFFLINE'
+        # Skip Dimension, go straight to Size
+        self.setup_off_size()
+        self.show_frame("Off_Size")
+
+    def setup_off_size(self):
+        f = self.frames["Off_Size"]
+        for w in f.winfo_children(): w.destroy()
+        tk.Label(f, text="Select Grid Size", font=("Arial", 20)).pack(pady=30)
+        for i in [3, 4, 5]:
+            tk.Button(f, text=f"{i}x{i}", width=15, font=("Arial", 14), 
+                      command=lambda x=i: self.select_size_offline(x)).pack(pady=5)
         
-        for s in [3, 4, 5]:
-            btn = tk.Button(self.size_frame, text=f"{s} x {s}", font=('Arial', 14), width=20,
-                            command=lambda val=s: self.select_size(val))
-            btn.pack(pady=10)
+        if self.mode == 'OFFLINE':
+            tk.Button(f, text="Back", command=lambda: self.show_frame("MainMenu")).pack(pady=20)
 
-    def select_size(self, size):
+    def select_size_offline(self, size):
         self.n = size
-        self.size_frame.pack_forget()
-        self.mode_frame.pack(fill='both', expand=True)
-        dims = {3: "400x500", 4: "500x600", 5: "600x700"}
-        self.root.geometry(dims.get(size, "400x500"))
+        self.setup_off_mode()
+        self.show_frame("Off_Mode")
 
-    # --- SCREEN 2: MODE ---
-    def setup_mode_screen(self):
-        lbl = tk.Label(self.mode_frame, text="Select Game Mode", font=('Arial', 20, 'bold'))
-        lbl.pack(pady=30)
-        
-        btn_ai = tk.Button(self.mode_frame, text="Play vs AI", font=('Arial', 14), width=20,
-                           command=lambda: self.goto_name_screen('AI'))
-        btn_ai.pack(pady=10)
-        
-        btn_pvp = tk.Button(self.mode_frame, text="2 Player (PvP)", font=('Arial', 14), width=20,
-                            command=lambda: self.goto_name_screen('PvP'))
-        btn_pvp.pack(pady=10)
-        
-        tk.Button(self.mode_frame, text="Back", command=self.show_size_screen).pack(pady=20)
+    def setup_off_mode(self):
+        f = self.frames["Off_Mode"]
+        for w in f.winfo_children(): w.destroy()
+        tk.Label(f, text="Select Opponent", font=("Arial", 20)).pack(pady=30)
+        tk.Button(f, text="Vs AI (Computer)", width=20, font=("Arial", 14), 
+                  command=lambda: self.prep_names('AI')).pack(pady=10)
+        tk.Button(f, text="2 Player (Local)", width=20, font=("Arial", 14), 
+                  command=lambda: self.prep_names('PvP')).pack(pady=10)
+        tk.Button(f, text="Back", command=lambda: self.show_frame("Off_Size")).pack(pady=20)
 
-    def show_size_screen(self):
-        self.mode_frame.pack_forget()
-        self.name_frame.pack_forget()
-        self.game_frame.pack_forget()
-        self.size_frame.pack(fill='both', expand=True)
+    def prep_names(self, submode):
+        self.off_submode = submode
+        self.setup_name_screen()
+        self.show_frame("NameEntry")
 
-    # --- SCREEN 3: NAME INPUT (NEW) ---
-    def goto_name_screen(self, mode):
-        self.game_mode = mode
-        self.mode_frame.pack_forget()
+    # ==========================
+    # ONLINE FLOW
+    # ==========================
+    def start_online_flow(self):
+        self.mode = 'ONLINE'
+        self.setup_online_menu()
+        self.show_frame("Online_Menu")
+
+    def setup_online_menu(self):
+        f = self.frames["Online_Menu"]
+        for w in f.winfo_children(): w.destroy()
+        tk.Label(f, text="Online Multiplayer", font=("Arial", 20)).pack(pady=30)
+        tk.Button(f, text="Host Game", width=15, font=("Arial", 14), command=self.host_game).pack(pady=10)
+        tk.Button(f, text="Join Game", width=15, font=("Arial", 14), command=self.join_game).pack(pady=10)
+        tk.Button(f, text="Back", command=lambda: self.show_frame("MainMenu")).pack(pady=20)
+
+    def host_game(self):
+        self.is_host = True
+        self.my_role = PLAYER_X
+        ip = socket.gethostbyname(socket.gethostname())
+        self.show_wait_screen(f"Hosting on IP:\n{ip}\n\nWaiting for Joiner...")
+        threading.Thread(target=self.server_thread, daemon=True).start()
+
+    def join_game(self):
+        self.is_host = False
+        self.my_role = PLAYER_O
+        ip = simpledialog.askstring("Connect", "Enter Host IP Address:")
+        if ip:
+            self.show_wait_screen(f"Connecting to {ip}...")
+            threading.Thread(target=self.client_thread, args=(ip,), daemon=True).start()
+
+    def show_wait_screen(self, msg):
+        f = self.frames["Online_Wait"]
+        for w in f.winfo_children(): w.destroy()
+        tk.Label(f, text=msg, font=("Arial", 16)).pack(pady=100)
+        self.show_frame("Online_Wait")
+
+    # --- Networking ---
+    def server_thread(self):
+        try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.bind(('0.0.0.0', 9999))
+            srv.listen(1)
+            conn, _ = srv.accept()
+            self.socket = conn
+            self.socket.send("CONNECTED".encode())
+            self.root.after(0, lambda: self.prep_names('ONLINE'))
+            self.listen_thread()
+        except Exception as e:
+            print(e)
+
+    def client_thread(self, ip):
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.connect((ip, 9999))
+            msg = self.socket.recv(1024).decode()
+            if msg == "CONNECTED":
+                self.root.after(0, lambda: self.prep_names('ONLINE'))
+                self.listen_thread()
+        except:
+            self.root.after(0, lambda: messagebox.showerror("Error", "Connection Failed"))
+            self.root.after(0, lambda: self.show_frame("Online_Menu"))
+
+    def listen_thread(self):
+        t = threading.Thread(target=self.network_listener, daemon=True)
+        t.start()
+
+    def network_listener(self):
+        while True:
+            try:
+                data = self.socket.recv(1024).decode()
+                if not data: break
+                for msg in data.split(';'):
+                    if msg: self.handle_network_msg(msg)
+            except:
+                break
+
+    def handle_network_msg(self, msg):
+        parts = msg.split(',')
+        cmd = parts[0]
         
-        # Clear previous widgets in name frame
-        for widget in self.name_frame.winfo_children():
-            widget.destroy()
+        if cmd == "NAME":
+            self.p2_name = parts[1]
+            if self.is_host:
+                # Host now chooses Size
+                self.root.after(0, self.setup_off_size)
+                self.root.after(0, lambda: self.show_frame("Off_Size"))
+                self.root.after(0, self.override_size_buttons_for_online)
+            else:
+                self.root.after(0, lambda: self.show_wait_screen("Waiting for Host to select size..."))
+
+        elif cmd == "SIZE":
+            self.n = int(parts[1])
+            self.root.after(0, self.start_game)
+
+        elif cmd == "MOVE":
+            idx = int(parts[1])
+            self.root.after(0, lambda: self.apply_remote_move(idx))
+
+        elif cmd == "WIN":
+            self.root.after(0, lambda: self.game_over_remote())
+
+    def override_size_buttons_for_online(self):
+        f = self.frames["Off_Size"]
+        # Hide back button in online setup
+        for w in f.winfo_children():
+            if w['text'] == "Back": w.pack_forget()
             
-        self.name_frame.pack(fill='both', expand=True)
-        
-        lbl = tk.Label(self.name_frame, text="Enter Player Names", font=('Arial', 18, 'bold'))
-        lbl.pack(pady=20)
+        # Hijack size buttons
+        for widget in f.winfo_children():
+            if isinstance(widget, tk.Button) and "x" in widget['text']:
+                size = int(widget['text'][0])
+                widget.config(command=lambda s=size: self.send_size_config(s))
 
-        # Player 1 Entry
-        tk.Label(self.name_frame, text="Player 1 Name (X):", font=('Arial', 12)).pack(pady=5)
-        self.entry_p1 = tk.Entry(self.name_frame, font=('Arial', 12))
-        self.entry_p1.pack(pady=5)
-        self.entry_p1.insert(0, "Player 1") # Default
-
-        # Player 2 Entry (Only if PvP)
-        if mode == 'PvP':
-            tk.Label(self.name_frame, text="Player 2 Name (O):", font=('Arial', 12)).pack(pady=5)
-            self.entry_p2 = tk.Entry(self.name_frame, font=('Arial', 12))
-            self.entry_p2.pack(pady=5)
-            self.entry_p2.insert(0, "Player 2")
-        else:
-            tk.Label(self.name_frame, text="Opponent:", font=('Arial', 12)).pack(pady=5)
-            lbl_ai = tk.Label(self.name_frame, text="Computer (AI)", font=('Arial', 12, 'italic'), fg='gray')
-            lbl_ai.pack(pady=5)
-
-        start_btn = tk.Button(self.name_frame, text="Start Game", font=('Arial', 14, 'bold'), bg="#dddddd",
-                              command=self.validate_names_and_start)
-        start_btn.pack(pady=30)
-        
-        tk.Button(self.name_frame, text="Back", command=lambda: [self.name_frame.pack_forget(), self.mode_frame.pack(fill='both', expand=True)]).pack()
-
-    def validate_names_and_start(self):
-        # Get names from entries
-        p1 = self.entry_p1.get().strip()
-        
-        if self.game_mode == 'PvP':
-            p2 = self.entry_p2.get().strip()
-        else:
-            p2 = "Computer (AI)"
-            
-        # Set Defaults if empty
-        self.p1_name = p1 if p1 else "Player 1"
-        self.p2_name = p2 if p2 else "Player 2"
-        
+    def send_size_config(self, size):
+        self.n = size
+        self.socket.send(f"SIZE,{size};".encode())
         self.start_game()
 
-    # --- SCREEN 4: GAME BOARD ---
-    def start_game(self):
-        self.name_frame.pack_forget()
-        self.game_frame.pack(fill='both', expand=True)
+    # ==========================
+    # NAME ENTRY SCREEN
+    # ==========================
+    def setup_name_screen(self):
+        f = self.frames["NameEntry"]
+        for w in f.winfo_children(): w.destroy()
         
-        self.game = TicTacToeFIFO(self.n)
-        self.current_turn = PLAYER_X
-        self.game_over = False
+        tk.Label(f, text="Enter Name", font=("Arial", 18)).pack(pady=20)
+        tk.Label(f, text="Your Name:").pack()
+        e1 = tk.Entry(f); e1.pack(pady=5); e1.insert(0, "Player 1")
         
-        # Build Board
-        for widget in self.game_frame.winfo_children():
-            widget.destroy()
+        e2 = None
+        if self.mode == 'OFFLINE' and self.off_submode == 'PvP':
+            tk.Label(f, text="Player 2 Name:").pack()
+            e2 = tk.Entry(f); e2.pack(pady=5); e2.insert(0, "Player 2")
             
-        self.build_game_ui()
-        self.update_status_text()
+        tk.Button(f, text="Start Game" if self.mode=='OFFLINE' else "Ready", 
+                  font=("Arial", 14), bg="#cfc",
+                  command=lambda: self.submit_names(e1.get(), e2.get() if e2 else None)).pack(pady=20)
 
-    def build_game_ui(self):
-        # Info Header
-        header = tk.Frame(self.game_frame)
-        header.pack(pady=10)
+    def submit_names(self, n1, n2):
+        self.p1_name = n1
         
-        tk.Label(header, text=f"{self.p1_name} (X)", fg="blue", font=('Arial', 12, 'bold')).pack(side='left', padx=20)
-        tk.Label(header, text="VS", font=('Arial', 10)).pack(side='left')
-        tk.Label(header, text=f"{self.p2_name} (O)", fg="red", font=('Arial', 12, 'bold')).pack(side='left', padx=20)
-
-        grid_frame = tk.Frame(self.game_frame)
-        grid_frame.pack(pady=10)
-        
-        self.buttons = []
-        for i in range(self.n * self.n):
-            btn = tk.Button(grid_frame, text=EMPTY, font=('Arial', 18, 'bold'), 
-                            width=4, height=2,
-                            command=lambda idx=i: self.handle_click(idx))
-            row = i // self.n
-            col = i % self.n
-            btn.grid(row=row, column=col, padx=3, pady=3)
-            self.buttons.append(btn)
-
-        self.status_label = tk.Label(self.game_frame, text="", font=('Arial', 14))
-        self.status_label.pack(pady=10)
-
-        # Controls
-        btn_frame = tk.Frame(self.game_frame)
-        btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="Restart", command=self.start_game).pack(side='left', padx=10)
-        tk.Button(btn_frame, text="Main Menu", command=self.show_size_screen).pack(side='left', padx=10)
-        
-        tk.Label(self.game_frame, text=f"FIFO Rule: Max {self.n} pieces.\nOldest removed on {self.n+1}th move.", fg="gray").pack(pady=5)
-
-    def update_gui_board(self):
-        for i, mark in enumerate(self.game.board):
-            self.buttons[i].config(text=mark, bg="SystemButtonFace")
-            if mark == PLAYER_X: self.buttons[i].config(fg="blue")
-            elif mark == PLAYER_O: self.buttons[i].config(fg="red")
-            else: self.buttons[i].config(fg="black")
-
-        # Highlight oldest
-        current_queue = self.game.move_queues[self.current_turn]
-        if len(current_queue) == self.n and not self.game_over:
-            self.buttons[current_queue[0]].config(bg="#ffcccb")
-
-    def update_status_text(self):
-        if self.game_over: return
-        
-        if self.current_turn == PLAYER_X:
-            self.status_label.config(text=f"{self.p1_name}'s Turn (X)", fg="blue")
+        if self.mode == 'OFFLINE':
+            if self.off_submode == 'PvP': self.p2_name = n2
+            else: self.p2_name = "Computer AI"
+            self.start_game()
         else:
-            if self.game_mode == 'AI':
-                self.status_label.config(text=f"{self.p2_name} is thinking...", fg="red")
-            else:
-                self.status_label.config(text=f"{self.p2_name}'s Turn (O)", fg="red")
+            self.p1_name = n1 # Visuals only
+            self.socket.send(f"NAME,{n1};".encode())
+            self.show_wait_screen("Waiting for Opponent Name...")
 
-    def handle_click(self, index):
-        if self.game_over: return
-        if self.game_mode == 'AI' and self.current_turn == PLAYER_O: return
+    # ==========================
+    # GAMEPLAY
+    # ==========================
+    def start_game(self):
+        self.game = GameLogic(self.n)
+        self.curr_player = PLAYER_X
+        self.game_running = True
         
-        if self.game.board[index] != EMPTY:
-            messagebox.showwarning("Invalid", "Spot taken!")
+        if self.mode == 'ONLINE' and not self.is_host:
+            self.turn_lock = True
+        else:
+            self.turn_lock = False
+
+        self.setup_game_board()
+        self.show_frame("Game")
+        self.update_status()
+
+    def setup_game_board(self):
+        f = self.frames["Game"]
+        for w in f.winfo_children(): w.destroy()
+        
+        info = f"{self.p1_name} (Me)" if self.mode=='ONLINE' else f"{self.p1_name} vs {self.p2_name}"
+        tk.Label(f, text=info, font=("Arial", 12)).pack(pady=5)
+        self.lbl_status = tk.Label(f, text="Game Start", font=("Arial", 14, "bold"))
+        self.lbl_status.pack(pady=5)
+
+        container = tk.Frame(f); container.pack(pady=10)
+        self.btns = []
+
+        for i in range(self.n * self.n):
+            b = self.make_btn(container, i)
+            b.grid(row=i//self.n, column=i%self.n, padx=2, pady=2)
+            self.btns.append(b)
+        
+        tk.Button(f, text="Main Menu", command=lambda: self.show_frame("MainMenu")).pack(pady=10)
+        tk.Label(f, text=f"FIFO Rule: Max {self.n} pieces allowed.\nOldest removed on next move.", fg="gray").pack()
+
+    def make_btn(self, parent, idx):
+        return tk.Button(parent, text=EMPTY, font=('Arial', 18, 'bold'), width=4, height=2,
+                         command=lambda: self.on_click(idx))
+
+    def on_click(self, idx):
+        if not self.game_running: return
+        if self.mode == 'ONLINE' and self.turn_lock: return
+        if self.mode == 'OFFLINE' and self.off_submode == 'AI' and self.curr_player == PLAYER_O: return
+        if self.game.board[idx] != EMPTY: return
+
+        # Apply Move Locally
+        self.game.make_move(idx, self.curr_player)
+        self.update_ui()
+        
+        if self.mode == 'ONLINE':
+            self.socket.send(f"MOVE,{idx};".encode())
+            self.turn_lock = True
+
+        if self.game.check_winner(self.curr_player):
+            self.game_over_local(True)
+            if self.mode == 'ONLINE': self.socket.send(f"WIN,{self.curr_player};".encode())
             return
 
-        self.execute_move(index, self.current_turn)
-        if self.check_win(self.current_turn): return
+        self.switch_turn()
         
-        self.toggle_turn()
-        self.update_gui_board()
-        self.update_status_text()
+        if self.mode == 'OFFLINE' and self.off_submode == 'AI' and self.curr_player == PLAYER_O:
+            threading.Thread(target=self.ai_move, daemon=True).start()
 
-        if self.game_mode == 'AI' and self.current_turn == PLAYER_O:
-            threading.Thread(target=self.ai_move_thread, daemon=True).start()
+    def apply_remote_move(self, idx):
+        opp = PLAYER_O if self.my_role == PLAYER_X else PLAYER_X
+        self.game.make_move(idx, opp)
+        self.update_ui()
+        self.switch_turn()
+        self.turn_lock = False
 
-    def ai_move_thread(self):
-        time.sleep(0.6)
-        best_move = self.game.find_best_move()
-        self.root.after(0, lambda: self.finish_ai_move(best_move))
+    def switch_turn(self):
+        self.curr_player = PLAYER_O if self.curr_player == PLAYER_X else PLAYER_X
+        self.update_status()
 
-    def finish_ai_move(self, move):
+    def update_status(self):
+        if not self.game_running: return
+        if self.mode == 'ONLINE':
+            txt = "YOUR TURN" if not self.turn_lock else "OPPONENT'S TURN"
+            col = "green" if not self.turn_lock else "red"
+        else:
+            p = self.p1_name if self.curr_player == PLAYER_X else self.p2_name
+            txt = f"{p}'s Turn ({self.curr_player})"
+            col = "blue" if self.curr_player == PLAYER_X else "red"
+        self.lbl_status.config(text=txt, fg=col)
+
+    def update_ui(self):
+        for i, val in enumerate(self.game.board):
+            self.btns[i].config(text=val, bg="#f0f0f0")
+            if val == PLAYER_X: self.btns[i].config(fg="blue")
+            elif val == PLAYER_O: self.btns[i].config(fg="red")
+        
+        q = self.game.move_queues[self.curr_player]
+        if len(q) == self.n:
+            self.btns[q[0]].config(bg="#ffcccb")
+
+    def ai_move(self):
+        time.sleep(0.5)
+        move = self.game.best_move_ai()
         if move is not None:
-            self.execute_move(move, PLAYER_O)
-            if self.check_win(PLAYER_O): return
+            self.root.after(0, lambda: self.finalize_ai(move))
+
+    def finalize_ai(self, move):
+        self.game.make_move(move, PLAYER_O)
+        self.update_ui()
+        if self.game.check_winner(PLAYER_O):
+            self.game_over_local(False)
+            return
+        self.switch_turn()
+
+    def game_over_local(self, i_won):
+        self.game_running = False
+        msg = "You Won!" if i_won else "You Lost!"
+        if self.mode == 'OFFLINE': 
+             w = self.p1_name if self.curr_player == PLAYER_X else self.p2_name
+             msg = f"{w} Wins!"
         
-        self.toggle_turn()
-        self.update_gui_board()
-        self.update_status_text()
+        self.lbl_status.config(text=msg, fg="purple")
+        messagebox.showinfo("Game Over", msg)
 
-    def execute_move(self, index, player):
-        self.game.make_move(index, player)
-        self.update_gui_board()
-
-    def toggle_turn(self):
-        self.current_turn = PLAYER_O if self.current_turn == PLAYER_X else PLAYER_X
-
-    def check_win(self, player):
-        if self.game.check_winner(player):
-            self.game_over = True
-            
-            winner_name = self.p1_name if player == PLAYER_X else self.p2_name
-            msg = f"{winner_name} Wins!"
-            
-            self.status_label.config(text=msg, fg="green")
-            messagebox.showinfo("Game Over", msg)
-            return True
-        return False
+    def game_over_remote(self):
+        self.game_running = False
+        self.lbl_status.config(text="You Lost!", fg="red")
+        messagebox.showinfo("Game Over", "Opponent Won!")
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = TicTacToeGUI(root)
-    root.mainloop() 
+    app = AllInOneApp(root)
+    root.mainloop()
