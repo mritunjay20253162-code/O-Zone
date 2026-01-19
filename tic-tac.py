@@ -4,7 +4,7 @@ import socket
 import threading
 import time
 import math
-import random  # --- NEW: Required for randomizing the starter ---
+import random
 
 # --- Constants ---
 PLAYER_X = 'X'
@@ -45,29 +45,52 @@ class GameLogic:
     def get_valid_moves(self):
         return [i for i, x in enumerate(self.board) if x == EMPTY]
 
-    # --- Minimax AI ---
-    def best_move_ai(self):
+    # --- AI with Difficulty Levels ---
+    def best_move_ai(self, difficulty):
+        valid_moves = self.get_valid_moves()
+        if not valid_moves: return None
+
+        # --- LEVEL 1: EASY (Random) ---
+        if difficulty == 'EASY':
+            return random.choice(valid_moves)
+
+        # --- LEVEL 2 & 3: MEDIUM & HARD (Minimax) ---
         best_val = -math.inf
         best_move = None
-        # Depth: 5 for 3x3, 3 for 4x4, 2 for 5x5
-        depth_limit = 5 if self.n == 3 else (3 if self.n == 4 else 2)
         
-        for move in self.get_valid_moves():
+        # MEDIUM: Look only 2 moves ahead (Immediate threats/wins only)
+        # HARD:   Look deep (Strategic)
+        if difficulty == 'MEDIUM':
+            depth_limit = 2
+        else: # HARD
+            depth_limit = 6 if self.n == 3 else (4 if self.n == 4 else 3)
+        
+        # Optimization: Sort moves to check Center first (Prunes the tree faster)
+        center = self.total_cells // 2
+        valid_moves.sort(key=lambda x: abs(x - center))
+
+        for move in valid_moves:
             self.board[move] = PLAYER_O
+            # Start Minimax
             val = self.minimax(0, False, -math.inf, math.inf, depth_limit)
             self.board[move] = EMPTY
+            
             if val > best_val:
                 best_val = val
                 best_move = move
+                
         return best_move
 
     def minimax(self, d, is_max, alpha, beta, max_d):
         if self.check_winner(PLAYER_O): return 1000 - d
         if self.check_winner(PLAYER_X): return -1000 + d
-        if d >= max_d: return 0
-        moves = self.get_valid_moves()
-        if not moves: return 0
+        
+        # Heuristic check when depth limit reached
+        if d >= max_d or not self.get_valid_moves():
+            return self.evaluate_board()
 
+        moves = self.get_valid_moves()
+        
         if is_max:
             max_eval = -math.inf
             for move in moves:
@@ -89,6 +112,35 @@ class GameLogic:
                 if beta <= alpha: break
             return min_eval
 
+    def evaluate_board(self):
+        score = 0
+        center = self.n // 2
+        center_idx = center * self.n + center
+        if self.board[center_idx] == PLAYER_O: score += 15
+        elif self.board[center_idx] == PLAYER_X: score -= 15
+
+        lines = []
+        for i in range(self.n):
+            row = [self.board[i*self.n + c] for c in range(self.n)]
+            col = [self.board[r*self.n + i] for r in range(self.n)]
+            lines.extend([row, col])
+        diag1 = [self.board[i*self.n + i] for i in range(self.n)]
+        diag2 = [self.board[i*self.n + (self.n-1-i)] for i in range(self.n)]
+        lines.extend([diag1, diag2])
+
+        for line in lines:
+            o_count = line.count(PLAYER_O)
+            x_count = line.count(PLAYER_X)
+            empty_count = line.count(EMPTY)
+
+            if o_count == self.n - 1 and empty_count == 1: score += 50
+            elif x_count == self.n - 1 and empty_count == 1: score -= 50
+            
+            if o_count == 1 and x_count == 0: score += 5
+            elif x_count == 1 and o_count == 0: score -= 5
+
+        return score
+
 # ==========================================
 # 2. GUI APP
 # ==========================================
@@ -96,7 +148,7 @@ class AllInOneApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Tic-Tac-Toe LAN Multiplayer")
-        self.root.geometry("500x700")  # Increased height slightly for score labels
+        self.root.geometry("500x700") 
         
         self.mode = None
         self.game = None
@@ -108,12 +160,16 @@ class AllInOneApp:
         self.turn_lock = False
         self.n = 3
         
-        # --- NEW: SCORE SYSTEM VARIABLES ---
         self.score_x = 0
         self.score_o = 0
         
+        # New variable for AI difficulty
+        self.ai_difficulty = 'HARD' 
+        
         self.frames = {}
-        for f in ["MainMenu", "Off_Size", "Off_Mode", "NameEntry", "Online_Menu", "Online_Wait", "Game"]:
+        # Added "Off_Diff" to list
+        frame_list = ["MainMenu", "Off_Size", "Off_Mode", "Off_Diff", "NameEntry", "Online_Menu", "Online_Wait", "Game"]
+        for f in frame_list:
             self.frames[f] = tk.Frame(root)
             
         self.show_frame("MainMenu")
@@ -163,11 +219,42 @@ class AllInOneApp:
         f = self.frames["Off_Mode"]
         for w in f.winfo_children(): w.destroy()
         tk.Label(f, text="Select Opponent", font=("Arial", 20)).pack(pady=30)
+        
+        # Vs AI -> Go to Difficulty Select
         tk.Button(f, text="Vs AI", width=20, font=("Arial", 14), 
-                  command=lambda: self.prep_names('AI')).pack(pady=10)
+                  command=self.goto_difficulty_select).pack(pady=10)
+        
+        # PvP -> Go straight to Names
         tk.Button(f, text="2 Player (Local)", width=20, font=("Arial", 14), 
                   command=lambda: self.prep_names('PvP')).pack(pady=10)
+        
         tk.Button(f, text="Back", command=lambda: self.show_frame("Off_Size")).pack(pady=20)
+
+    # --- NEW: DIFFICULTY SELECTION SCREEN ---
+    def goto_difficulty_select(self):
+        self.off_submode = 'AI'
+        self.setup_off_diff()
+        self.show_frame("Off_Diff")
+
+    def setup_off_diff(self):
+        f = self.frames["Off_Diff"]
+        for w in f.winfo_children(): w.destroy()
+        tk.Label(f, text="Select AI Difficulty", font=("Arial", 20)).pack(pady=30)
+        
+        tk.Button(f, text="Easy (Random)", width=20, bg="#ccffcc", font=("Arial", 14), 
+                  command=lambda: self.set_difficulty('EASY')).pack(pady=10)
+        
+        tk.Button(f, text="Medium (Smartish)", width=20, bg="#ffffcc", font=("Arial", 14), 
+                  command=lambda: self.set_difficulty('MEDIUM')).pack(pady=10)
+        
+        tk.Button(f, text="Hard (Unbeatable)", width=20, bg="#ffcccc", font=("Arial", 14), 
+                  command=lambda: self.set_difficulty('HARD')).pack(pady=10)
+        
+        tk.Button(f, text="Back", command=lambda: self.show_frame("Off_Mode")).pack(pady=20)
+
+    def set_difficulty(self, diff):
+        self.ai_difficulty = diff
+        self.prep_names('AI')
 
     def prep_names(self, submode):
         self.off_submode = submode
@@ -191,27 +278,19 @@ class AllInOneApp:
     def host_game(self):
         self.is_host = True
         self.my_role = PLAYER_X
-        
-        # Start Server
         threading.Thread(target=self.server_thread, daemon=True).start()
-        
-        # Get Local IP
         try:
             hostname = socket.gethostname()
             local_ip = socket.gethostbyname(hostname)
         except:
-            local_ip = "Unknown (Check WiFi Settings)"
-            
+            local_ip = "Unknown"
         self.show_wait_screen(f"Hosting on IP: {local_ip}\n\nWaiting for Player to Join...")
 
     def join_game(self):
         self.is_host = False
         self.my_role = PLAYER_O
-        
-        # Only ask for IP (Port is fixed)
         ip_info = simpledialog.askstring("Connect", "Enter Host IP Address (e.g., 192.168.1.5):")
         if not ip_info: return
-
         self.show_wait_screen(f"Connecting to {ip_info}...")
         threading.Thread(target=self.client_thread, args=(ip_info,), daemon=True).start()
 
@@ -285,20 +364,15 @@ class AllInOneApp:
             idx = int(parts[1])
             self.root.after(0, lambda: self.apply_remote_move(idx))
         elif cmd == "WIN":
-            # Opponent tells us they won (or we won from their perspective)
-            # The message is "WIN,X" meaning X won.
             winner_char = parts[1] 
             self.root.after(0, lambda: self.game_over_remote(winner_char))
-        # --- NEW: RESTART COMMAND ---
         elif cmd == "RESTART":
             self.root.after(0, self.reset_match)
 
     def override_size_buttons_for_online(self):
         f = self.frames["Off_Size"]
-        # Hide standard back button
         for w in f.winfo_children():
             if w['text'] == "Back": w.pack_forget()
-            
         for widget in f.winfo_children():
             if isinstance(widget, tk.Button) and "x" in widget['text']:
                 size = int(widget['text'][0])
@@ -326,11 +400,15 @@ class AllInOneApp:
         tk.Button(f, text="Start / Ready", font=("Arial", 14), bg="#cfc",
                   command=lambda: self.submit_names(e1.get(), e2.get() if e2 else None)).pack(pady=20)
         
+        # Back Logic updated to return to correct screen
         tk.Button(f, text="Back", command=self.go_back_from_names).pack(pady=10)
 
     def go_back_from_names(self):
         if self.mode == 'OFFLINE':
-            self.show_frame("Off_Mode")
+            if self.off_submode == 'AI':
+                self.show_frame("Off_Diff") # Go back to difficulty
+            else:
+                self.show_frame("Off_Mode")
         else:
             if self.socket:
                 try: self.socket.close()
@@ -341,7 +419,10 @@ class AllInOneApp:
     def submit_names(self, n1, n2):
         self.p1_name = n1
         if self.mode == 'OFFLINE':
-            self.p2_name = n2 if self.off_submode == 'PvP' else "Computer AI"
+            if self.off_submode == 'AI':
+                self.p2_name = f"AI ({self.ai_difficulty.capitalize()})"
+            else:
+                self.p2_name = n2
             self.start_game()
         else:
             self.socket.send(f"NAME,{n1};".encode())
@@ -349,28 +430,18 @@ class AllInOneApp:
 
     # --- GAMEPLAY ---
     def start_game(self):
-        # Reset scores when a completely NEW game starts (not restart)
-        # If you want scores to persist even after going back to menu, move these lines to __init__
-        # But usually 'Start Game' means 0-0
         if self.game is None: 
             self.score_x = 0
             self.score_o = 0
-            
         self.reset_match()
         self.show_frame("Game")
 
     def reset_match(self):
-        # Initializes a fresh board but keeps scores
         self.game = GameLogic(self.n)
-        
-        # --- NEW: RANDOM START FOR OFFLINE ---
-        # In Offline mode, we randomly pick who moves first.
-        # In Online mode, we keep Standard (Host=X starts) to prevent desync unless we change protocol.
         if self.mode == 'OFFLINE':
             self.curr_player = random.choice([PLAYER_X, PLAYER_O])
         else:
             self.curr_player = PLAYER_X
-        # -------------------------------------
         
         self.game_running = True
         self.turn_lock = (self.mode == 'ONLINE' and not self.is_host)
@@ -378,16 +449,13 @@ class AllInOneApp:
         self.setup_game_board()
         self.update_status()
 
-        # --- NEW: TRIGGER AI IF IT STARTS ---
-        # If we are Offline, playing Vs AI, and the randomizer picked 'O' (AI's role) to start:
-        if self.mode == 'OFFLINE' and getattr(self, 'off_submode', '') == 'AI' and self.curr_player == PLAYER_O:
+        if self.mode == 'OFFLINE' and self.off_submode == 'AI' and self.curr_player == PLAYER_O:
             threading.Thread(target=self.ai_move, daemon=True).start()
 
     def setup_game_board(self):
         f = self.frames["Game"]
         for w in f.winfo_children(): w.destroy()
         
-        # --- NEW: SCORE LABELS ---
         score_text = f"Score: {self.score_x} - {self.score_o}"
         tk.Label(f, text=score_text, font=("Arial", 20, "bold"), fg="#333").pack(pady=5)
         
@@ -405,7 +473,6 @@ class AllInOneApp:
             b.grid(row=i//self.n, column=i%self.n, padx=2, pady=2)
             self.btns.append(b)
         
-        # New Reset Button (Optional, but good UX)
         tk.Button(f, text="Restart Match", command=self.trigger_restart_confirm).pack(pady=5)
         tk.Button(f, text="Main Menu", command=self.quit_to_menu).pack(pady=5)
         tk.Label(f, text=f"FIFO Rule: Max {self.n} pieces.", fg="gray").pack()
@@ -415,7 +482,7 @@ class AllInOneApp:
             try: self.socket.close()
             except: pass
             self.socket = None
-        self.game = None # Clear game so scores reset next time
+        self.game = None
         self.show_frame("MainMenu")
 
     def on_click(self, idx):
@@ -432,7 +499,6 @@ class AllInOneApp:
             self.turn_lock = True
 
         if self.game.check_winner(self.curr_player):
-            # Pass who won to the game_over function
             self.game_over_local(self.curr_player)
             if self.mode == 'ONLINE': 
                 self.socket.send(f"WIN,{self.curr_player};".encode())
@@ -474,7 +540,8 @@ class AllInOneApp:
 
     def ai_move(self):
         time.sleep(0.5)
-        move = self.game.best_move_ai()
+        # Pass the selected difficulty to the AI logic
+        move = self.game.best_move_ai(self.ai_difficulty)
         if move is not None: self.root.after(0, lambda: self.finalize_ai(move))
 
     def finalize_ai(self, move):
@@ -485,46 +552,27 @@ class AllInOneApp:
             return
         self.switch_turn()
 
-    # --- NEW: GAME OVER & RESTART LOGIC ---
-
     def game_over_local(self, winner_char):
         self.game_running = False
-        
-        # Update Score
         if winner_char == PLAYER_X: self.score_x += 1
         else: self.score_o += 1
-        
         msg = f"Player {winner_char} Wins!"
         self.lbl_status.config(text=msg, fg="purple")
-        
-        # Ask for restart
         play_again = messagebox.askyesno("Game Over", f"{msg}\n\nPlay Again?")
-        if play_again:
-            self.trigger_restart()
-        else:
-            pass # Stay on the finished board
+        if play_again: self.trigger_restart()
 
     def game_over_remote(self, winner_char):
         self.game_running = False
-        
-        # Update Score based on what opponent sent
         if winner_char == PLAYER_X: self.score_x += 1
         else: self.score_o += 1
-        
         self.lbl_status.config(text="Game Over", fg="red")
-        
-        # We don't ask the loser/receiver to restart immediately to avoid double popups.
-        # We wait for the winner (or anyone) to click Restart.
-        # OR we can just show info.
         messagebox.showinfo("Game Over", f"Player {winner_char} Won!")
 
     def trigger_restart_confirm(self):
-        # Manually clicking the Restart Button
         if messagebox.askyesno("Restart", "Are you sure you want to restart?"):
             self.trigger_restart()
 
     def trigger_restart(self):
-        # Execute restart locally and send signal if online
         self.reset_match()
         if self.mode == 'ONLINE':
             self.socket.send("RESTART;".encode())
@@ -533,4 +581,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = AllInOneApp(root)
     root.mainloop()
-
