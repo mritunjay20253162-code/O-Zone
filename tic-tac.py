@@ -6,15 +6,34 @@ import time
 import math
 import random
 
-# --- Constants ---
 PLAYER_X = 'X'
 PLAYER_O = 'O'
 EMPTY = ' '
-PORT = 9999  # Fixed Port for LAN
+PORT = 9999
 
-# ==========================================
-# 1. GAME LOGIC (Brain)
-# ==========================================
+COLORS = {
+    'bg': '#1e1e2e',
+    'fg': '#cdd6f4',
+    'btn_bg': '#313244',
+    'btn_hover': '#45475a',
+    'btn_text': '#ffffff',
+    'accent_x': '#89b4fa',
+    'accent_o': '#f38ba8',
+    'accent_1': '#a6e3a1',
+    'accent_2': '#fab387',
+    'fifo_fade': '#585b70',
+    'overlay_bg': '#282a36'
+}
+
+FONTS = {
+    'header': ("Segoe UI", 24, "bold"),
+    'title_huge': ("Segoe UI", 36, "bold"),
+    'sub': ("Segoe UI", 14),
+    'rules': ("Segoe UI", 11),
+    'btn': ("Segoe UI", 12, "bold"),
+    'game': ("Segoe UI", 20, "bold")
+}
+
 class GameLogic:
     def __init__(self, n):
         self.n = n
@@ -45,52 +64,40 @@ class GameLogic:
     def get_valid_moves(self):
         return [i for i, x in enumerate(self.board) if x == EMPTY]
 
-    # --- AI with Difficulty Levels ---
     def best_move_ai(self, difficulty):
         valid_moves = self.get_valid_moves()
         if not valid_moves: return None
 
-        # --- LEVEL 1: EASY (Random) ---
         if difficulty == 'EASY':
             return random.choice(valid_moves)
 
-        # --- LEVEL 2 & 3: MEDIUM & HARD (Minimax) ---
         best_val = -math.inf
         best_move = None
         
-        # MEDIUM: Look only 2 moves ahead (Immediate threats/wins only)
-        # HARD:   Look deep (Strategic)
         if difficulty == 'MEDIUM':
             depth_limit = 2
-        else: # HARD
+        else: 
             depth_limit = 6 if self.n == 3 else (4 if self.n == 4 else 3)
         
-        # Optimization: Sort moves to check Center first (Prunes the tree faster)
         center = self.total_cells // 2
         valid_moves.sort(key=lambda x: abs(x - center))
 
         for move in valid_moves:
             self.board[move] = PLAYER_O
-            # Start Minimax
             val = self.minimax(0, False, -math.inf, math.inf, depth_limit)
             self.board[move] = EMPTY
-            
             if val > best_val:
                 best_val = val
                 best_move = move
-                
         return best_move
 
     def minimax(self, d, is_max, alpha, beta, max_d):
         if self.check_winner(PLAYER_O): return 1000 - d
         if self.check_winner(PLAYER_X): return -1000 + d
-        
-        # Heuristic check when depth limit reached
         if d >= max_d or not self.get_valid_moves():
             return self.evaluate_board()
 
         moves = self.get_valid_moves()
-        
         if is_max:
             max_eval = -math.inf
             for move in moves:
@@ -118,37 +125,38 @@ class GameLogic:
         center_idx = center * self.n + center
         if self.board[center_idx] == PLAYER_O: score += 15
         elif self.board[center_idx] == PLAYER_X: score -= 15
-
-        lines = []
-        for i in range(self.n):
-            row = [self.board[i*self.n + c] for c in range(self.n)]
-            col = [self.board[r*self.n + i] for r in range(self.n)]
-            lines.extend([row, col])
-        diag1 = [self.board[i*self.n + i] for i in range(self.n)]
-        diag2 = [self.board[i*self.n + (self.n-1-i)] for i in range(self.n)]
-        lines.extend([diag1, diag2])
-
-        for line in lines:
-            o_count = line.count(PLAYER_O)
-            x_count = line.count(PLAYER_X)
-            empty_count = line.count(EMPTY)
-
-            if o_count == self.n - 1 and empty_count == 1: score += 50
-            elif x_count == self.n - 1 and empty_count == 1: score -= 50
-            
-            if o_count == 1 and x_count == 0: score += 5
-            elif x_count == 1 and o_count == 0: score -= 5
-
         return score
 
-# ==========================================
-# 2. GUI APP
-# ==========================================
-class AllInOneApp:
+class HoverButton(tk.Button):
+    def __init__(self, master, **kw):
+        self.default_bg = kw.get('bg', COLORS['btn_bg'])
+        self.hover_bg = kw.pop('hover_bg', COLORS['btn_hover'])
+        
+        kw.setdefault('activebackground', self.hover_bg)
+        kw.setdefault('activeforeground', COLORS['fg'])
+        kw.setdefault('bg', self.default_bg)
+        kw.setdefault('fg', COLORS['btn_text'])
+        kw.setdefault('font', FONTS['btn'])
+        kw.setdefault('relief', tk.FLAT)
+        kw.setdefault('bd', 0)
+        kw.setdefault('cursor', 'hand2')
+        
+        super().__init__(master, **kw)
+        self.bind("<Enter>", self.on_enter)
+        self.bind("<Leave>", self.on_leave)
+
+    def on_enter(self, e):
+        self['bg'] = self.hover_bg
+
+    def on_leave(self, e):
+        self['bg'] = self.default_bg
+
+class ModernApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Tic-Tac-Toe LAN Multiplayer")
-        self.root.geometry("500x700") 
+        self.root.title("FIFO Tic-Tac-Toe | MNNIT Project")
+        self.root.geometry("600x750")
+        self.root.configure(bg=COLORS['bg'])
         
         self.mode = None
         self.game = None
@@ -159,56 +167,266 @@ class AllInOneApp:
         self.p2_name = "Player 2"
         self.turn_lock = False
         self.n = 3
-        
         self.score_x = 0
         self.score_o = 0
+        self.ai_difficulty = 'HARD'
         
-        # New variable for AI difficulty
-        self.ai_difficulty = 'HARD' 
-        
-        self.frames = {}
-        # Added "Off_Diff" to list
-        frame_list = ["MainMenu", "Off_Size", "Off_Mode", "Off_Diff", "NameEntry", "Online_Menu", "Online_Wait", "Game"]
-        for f in frame_list:
-            self.frames[f] = tk.Frame(root)
-            
-        self.show_frame("MainMenu")
-        self.setup_main_menu()
+        self.animating = False
+        self.particles = []
 
-    def hide_all(self):
-        for f in self.frames.values(): f.pack_forget()
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
+
+        self.frames = {}
+        frame_list = ["Welcome", "MainMenu", "Off_Size", "Off_Mode", 
+                      "Off_Diff", "NameEntry", "Online_Menu", "Online_Wait", "Game"]
+        
+        for f_name in frame_list:
+            frame = tk.Frame(root, bg=COLORS['bg'])
+            frame.grid(row=0, column=0, sticky="nsew")
+            self.frames[f_name] = frame
+        self.current_frame_name = None
+        
+        self.show_frame("Welcome")
 
     def show_frame(self, name):
-        self.hide_all()
-        self.frames[name].pack(fill='both', expand=True)
-
-    # --- MAIN MENU ---
-    def setup_main_menu(self):
-        f = self.frames["MainMenu"]
-        for w in f.winfo_children(): w.destroy()
+        if self.current_frame_name == name: return
         
-        tk.Label(f, text="Tic-Tac-Toe\n(FIFO Mode)", font=("Arial", 24, "bold")).pack(pady=40)
-        tk.Button(f, text="Play Offline", font=("Arial", 16), width=20, 
-                  command=self.start_offline_flow).pack(pady=10)
-        tk.Button(f, text="Play Local LAN", font=("Arial", 16), width=20, 
-                  command=self.start_online_flow).pack(pady=10)
+        if name != "Welcome": self.animating = False
 
-    # --- OFFLINE FLOW ---
+        if name == "Welcome": self.setup_welcome_screen()
+        elif name == "MainMenu": self.setup_main_menu()
+        
+        screen_order = [
+            "Welcome", "MainMenu", "Off_Size", "Off_Mode", 
+            "Off_Diff", "NameEntry", "Online_Menu", "Online_Wait", "Game"
+        ]
+        
+        effect = "left" 
+        
+        if self.current_frame_name is None:
+            self.frames[name].tkraise()
+            self.current_frame_name = name
+            if name == "Welcome": self.setup_welcome_screen()
+            return
+
+        try:
+            old_idx = screen_order.index(self.current_frame_name)
+            new_idx = screen_order.index(name)
+        except ValueError:
+            old_idx, new_idx = 0, 0
+
+        if name == "Game":
+            effect = "up"
+        elif name == "Welcome":
+            effect = "down"
+        elif new_idx > old_idx:
+            effect = "left"
+        elif new_idx < old_idx:
+            effect = "right"
+
+        prev_frame = self.frames[self.current_frame_name]
+        next_frame = self.frames[name]
+        self.animate_switch(prev_frame, next_frame, name, effect)
+
+    def animate_switch(self, prev_frame, next_frame, next_name, effect):
+        width = self.root.winfo_width()
+        height = self.root.winfo_height()
+        
+        if effect == "left":
+            next_frame.place(x=width, y=0, width=width, height=height)
+        elif effect == "right":
+            next_frame.place(x=-width, y=0, width=width, height=height)
+        elif effect == "up":
+            next_frame.place(x=0, y=height, width=width, height=height)
+        elif effect == "down":
+            next_frame.place(x=0, y=-height, width=width, height=height)
+            
+        prev_frame.place(x=0, y=0, width=width, height=height)
+        next_frame.tkraise()
+
+        def slide(step=0):
+            speed = 45 
+            
+            offset = step * speed
+            
+            finished = False
+            
+            if effect == "left":
+                new_prev_x = -offset
+                new_next_x = width - offset
+                if new_next_x <= 0: finished = True
+                else:
+                    prev_frame.place(x=new_prev_x, y=0)
+                    next_frame.place(x=new_next_x, y=0)
+
+            elif effect == "right":
+                new_prev_x = offset
+                new_next_x = -width + offset
+                if new_next_x >= 0: finished = True
+                else:
+                    prev_frame.place(x=new_prev_x, y=0)
+                    next_frame.place(x=new_next_x, y=0)
+
+            elif effect == "up":
+                new_prev_y = -offset
+                new_next_y = height - offset
+                if new_next_y <= 0: finished = True
+                else:
+                    prev_frame.place(x=0, y=new_prev_y)
+                    next_frame.place(x=0, y=new_next_y)
+
+            elif effect == "down":
+                new_prev_y = offset
+                new_next_y = -height + offset
+                if new_next_y >= 0: finished = True
+                else:
+                    prev_frame.place(x=0, y=new_prev_y)
+                    next_frame.place(x=0, y=new_next_y)
+
+            if finished:
+                prev_frame.place_forget()
+                next_frame.place(x=0, y=0, width=width, height=height)
+                
+                next_frame.grid(row=0, column=0, sticky="nsew")
+                
+                self.current_frame_name = next_name
+                
+                if next_name == "Welcome":
+                    self.animating = True
+                    self.animate_background()
+            else:
+                self.root.after(10, lambda: slide(step+1))
+
+        slide()
+    def clear_frame(self, frame_name):
+        for widget in self.frames[frame_name].winfo_children():
+            widget.destroy()
+        return self.frames[frame_name]
+
+    def setup_welcome_screen(self):
+        f = self.clear_frame("Welcome")
+        
+        self.bg_canvas = tk.Canvas(f, bg=COLORS['bg'], highlightthickness=0)
+        self.bg_canvas.pack(fill="both", expand=True)
+        
+        self.particles = []
+        for _ in range(30):
+            self.particles.append(self.create_particle())
+            
+        self.animating = True
+        self.animate_background()
+
+        overlay = tk.Frame(f, bg=COLORS['overlay_bg'], padx=40, pady=40, bd=2, relief=tk.GROOVE)
+        overlay.place(relx=0.5, rely=0.5, anchor="center")
+
+        tk.Label(overlay, text="FIFO\nTIC-TAC-TOE", font=FONTS['title_huge'], 
+                 bg=COLORS['overlay_bg'], fg=COLORS['accent_x'], justify="center").pack(pady=(0, 10))
+        
+        tk.Label(overlay, text="MNNIT Project Edition", font=("Segoe UI", 12, "italic"), 
+                 bg=COLORS['overlay_bg'], fg=COLORS['accent_o']).pack(pady=(0, 30))
+
+        rules_frame = tk.Frame(overlay, bg=COLORS['overlay_bg'])
+        rules_frame.pack(fill="x", pady=20)
+        
+        tk.Label(rules_frame, text="GAME RULES:", font=FONTS['btn'], 
+                 bg=COLORS['overlay_bg'], fg=COLORS['accent_1'], anchor="w").pack(fill="x")
+        
+        rules = [
+            "• Objective: Get N symbols in a row/col/diag.",
+            f"• FIFO Rule: Max N pieces per player allowed.",
+            "• Placing the (N+1)th piece removes your oldest.",
+            "• Strategy: Trap opponent while saving your pieces!"
+        ]
+        for rule in rules:
+            tk.Label(rules_frame, text=rule, font=FONTS['rules'], 
+                     bg=COLORS['overlay_bg'], fg=COLORS['fg'], anchor="w", justify="left").pack(fill="x", pady=2)
+
+        HoverButton(overlay, text="ENTER GAME >>>", width=20, pady=10, 
+                    bg=COLORS['accent_1'], fg=COLORS['bg'], hover_bg="#89e389", 
+                    font=("Segoe UI", 14, "bold"),
+                    command=lambda: self.show_frame("MainMenu")).pack(pady=(40, 10))
+
+    def create_particle(self):
+        text = random.choice(['X', 'O'])
+        color = COLORS['accent_x'] if text == 'X' else COLORS['accent_o']
+        size = random.randint(20, 60)
+        font = ("Arial", size, "bold")
+        
+        side = random.choice(['top', 'bottom', 'left', 'right'])
+        w = self.root.winfo_width() or 600
+        h = self.root.winfo_height() or 750
+        
+        if side == 'top': 
+            x, y = random.randint(0, w), -50
+            dx, dy = random.uniform(-1, 1), random.uniform(1, 4)
+        elif side == 'bottom': 
+            x, y = random.randint(0, w), h+50
+            dx, dy = random.uniform(-1, 1), random.uniform(-4, -1)
+        elif side == 'left': 
+            x, y = -50, random.randint(0, h)
+            dx, dy = random.uniform(1, 4), random.uniform(-1, 1)
+        else:
+            x, y = w+50, random.randint(0, h)
+            dx, dy = random.uniform(-4, -1), random.uniform(-1, 1)
+
+        item = self.bg_canvas.create_text(x, y, text=text, font=font, fill=color, tag="particle")
+        return {'item': item, 'dx': dx, 'dy': dy}
+
+    def animate_background(self):
+        if not self.animating: return
+        
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        
+        particles_to_remove = []
+        for p in self.particles:
+            self.bg_canvas.move(p['item'], p['dx'], p['dy'])
+            pos = self.bg_canvas.coords(p['item'])
+            
+            if (pos[0] < -100 or pos[0] > w + 100 or 
+                pos[1] < -100 or pos[1] > h + 100):
+                particles_to_remove.append(p)
+                
+        for p in particles_to_remove:
+            self.bg_canvas.delete(p['item'])
+            self.particles.remove(p)
+            self.particles.append(self.create_particle())
+
+        self.root.after(30, self.animate_background)
+
+    def setup_main_menu(self):
+        f = self.clear_frame("MainMenu")
+        
+        tk.Label(f, text="MAIN MENU", font=FONTS['header'], 
+                 bg=COLORS['bg'], fg=COLORS['accent_1']).pack(pady=(80, 40))
+        
+        HoverButton(f, text="PLAY OFFLINE", width=25, pady=12, font=FONTS['btn'],
+                    command=self.start_offline_flow).pack(pady=15)
+        
+        HoverButton(f, text="LAN MULTIPLAYER", width=25, pady=12, font=FONTS['btn'],
+                    command=self.start_online_flow).pack(pady=15)
+        
+        HoverButton(f, text="← Back to Welcome", width=20, bg="#45475a",
+                    command=lambda: self.show_frame("Welcome")).pack(pady=50)
+
+
     def start_offline_flow(self):
         self.mode = 'OFFLINE'
         self.setup_off_size()
         self.show_frame("Off_Size")
 
     def setup_off_size(self):
-        f = self.frames["Off_Size"]
-        for w in f.winfo_children(): w.destroy()
-        tk.Label(f, text="Select Grid Size", font=("Arial", 20)).pack(pady=30)
-        for i in [3, 4, 5]:
-            tk.Button(f, text=f"{i}x{i}", width=15, font=("Arial", 14), 
-                      command=lambda x=i: self.select_size_offline(x)).pack(pady=5)
+        f = self.clear_frame("Off_Size")
+        tk.Label(f, text="SELECT GRID SIZE", font=FONTS['header'], 
+                 bg=COLORS['bg'], fg=COLORS['fg']).pack(pady=50)
         
-        if self.mode == 'OFFLINE':
-            tk.Button(f, text="Back", command=lambda: self.show_frame("MainMenu")).pack(pady=20)
+        for i in [3, 4, 5]:
+            HoverButton(f, text=f"{i} x {i}", width=15, pady=5, 
+                        command=lambda x=i: self.select_size_offline(x)).pack(pady=10)
+        
+        HoverButton(f, text="← Back", width=10, bg="#45475a", 
+                    command=lambda: self.show_frame("MainMenu")).pack(pady=30)
 
     def select_size_offline(self, size):
         self.n = size
@@ -216,41 +434,40 @@ class AllInOneApp:
         self.show_frame("Off_Mode")
 
     def setup_off_mode(self):
-        f = self.frames["Off_Mode"]
-        for w in f.winfo_children(): w.destroy()
-        tk.Label(f, text="Select Opponent", font=("Arial", 20)).pack(pady=30)
+        f = self.clear_frame("Off_Mode")
+        tk.Label(f, text="CHOOSE OPPONENT", font=FONTS['header'], 
+                 bg=COLORS['bg'], fg=COLORS['fg']).pack(pady=50)
         
-        # Vs AI -> Go to Difficulty Select
-        tk.Button(f, text="Vs AI", width=20, font=("Arial", 14), 
-                  command=self.goto_difficulty_select).pack(pady=10)
+        HoverButton(f, text="VS AI (Computer)", width=20, pady=10, 
+                    command=self.goto_difficulty_select).pack(pady=10)
         
-        # PvP -> Go straight to Names
-        tk.Button(f, text="2 Player (Local)", width=20, font=("Arial", 14), 
-                  command=lambda: self.prep_names('PvP')).pack(pady=10)
+        HoverButton(f, text="VS FRIEND (Local)", width=20, pady=10, 
+                    command=lambda: self.prep_names('PvP')).pack(pady=10)
         
-        tk.Button(f, text="Back", command=lambda: self.show_frame("Off_Size")).pack(pady=20)
+        HoverButton(f, text="← Back", width=10, bg="#45475a", 
+                    command=lambda: self.show_frame("Off_Size")).pack(pady=30)
 
-    # --- NEW: DIFFICULTY SELECTION SCREEN ---
     def goto_difficulty_select(self):
         self.off_submode = 'AI'
         self.setup_off_diff()
         self.show_frame("Off_Diff")
 
     def setup_off_diff(self):
-        f = self.frames["Off_Diff"]
-        for w in f.winfo_children(): w.destroy()
-        tk.Label(f, text="Select AI Difficulty", font=("Arial", 20)).pack(pady=30)
+        f = self.clear_frame("Off_Diff")
+        tk.Label(f, text="AI DIFFICULTY", font=FONTS['header'], 
+                 bg=COLORS['bg'], fg=COLORS['fg']).pack(pady=50)
         
-        tk.Button(f, text="Easy (Random)", width=20, bg="#ccffcc", font=("Arial", 14), 
-                  command=lambda: self.set_difficulty('EASY')).pack(pady=10)
+        HoverButton(f, text="EASY (Random)", width=20, hover_bg=COLORS['accent_1'], 
+                    command=lambda: self.set_difficulty('EASY')).pack(pady=10)
         
-        tk.Button(f, text="Medium (Smartish)", width=20, bg="#ffffcc", font=("Arial", 14), 
-                  command=lambda: self.set_difficulty('MEDIUM')).pack(pady=10)
+        HoverButton(f, text="MEDIUM (Smart)", width=20, hover_bg=COLORS['accent_2'], 
+                    command=lambda: self.set_difficulty('MEDIUM')).pack(pady=10)
         
-        tk.Button(f, text="Hard (Unbeatable)", width=20, bg="#ffcccc", font=("Arial", 14), 
-                  command=lambda: self.set_difficulty('HARD')).pack(pady=10)
+        HoverButton(f, text="HARD (Unbeatable)", width=20, hover_bg=COLORS['accent_o'], 
+                    command=lambda: self.set_difficulty('HARD')).pack(pady=10)
         
-        tk.Button(f, text="Back", command=lambda: self.show_frame("Off_Mode")).pack(pady=20)
+        HoverButton(f, text="← Back", width=10, bg="#45475a", 
+                    command=lambda: self.show_frame("Off_Mode")).pack(pady=30)
 
     def set_difficulty(self, diff):
         self.ai_difficulty = diff
@@ -261,44 +478,194 @@ class AllInOneApp:
         self.setup_name_screen()
         self.show_frame("NameEntry")
 
-    # --- ONLINE (LAN) FLOW ---
     def start_online_flow(self):
         self.mode = 'ONLINE'
         self.setup_online_menu()
         self.show_frame("Online_Menu")
 
     def setup_online_menu(self):
-        f = self.frames["Online_Menu"]
-        for w in f.winfo_children(): w.destroy()
-        tk.Label(f, text="Local LAN Multiplayer", font=("Arial", 20)).pack(pady=30)
-        tk.Button(f, text="Host Game", width=15, font=("Arial", 14), command=self.host_game).pack(pady=10)
-        tk.Button(f, text="Join Game", width=15, font=("Arial", 14), command=self.join_game).pack(pady=10)
-        tk.Button(f, text="Back", command=lambda: self.show_frame("MainMenu")).pack(pady=20)
+        f = self.clear_frame("Online_Menu")
+        tk.Label(f, text="LAN MULTIPLAYER", font=FONTS['header'], 
+                 bg=COLORS['bg'], fg=COLORS['accent_x']).pack(pady=50)
+        
+        HoverButton(f, text="HOST GAME", width=20, pady=10, 
+                    command=self.host_game).pack(pady=10)
+        
+        HoverButton(f, text="JOIN GAME", width=20, pady=10, 
+                    command=self.join_game).pack(pady=10)
+        
+        HoverButton(f, text="← Back", width=10, bg="#45475a", 
+                    command=lambda: self.show_frame("MainMenu")).pack(pady=30)
 
     def host_game(self):
         self.is_host = True
         self.my_role = PLAYER_X
         threading.Thread(target=self.server_thread, daemon=True).start()
-        try:
+        
+        try: 
             hostname = socket.gethostname()
             local_ip = socket.gethostbyname(hostname)
-        except:
+        except: 
             local_ip = "Unknown"
-        self.show_wait_screen(f"Hosting on IP: {local_ip}\n\nWaiting for Player to Join...")
+            
+        self.show_wait_screen(f"HOSTING ON IP:\n{local_ip}\n\nWaiting for player...")
 
     def join_game(self):
         self.is_host = False
         self.my_role = PLAYER_O
-        ip_info = simpledialog.askstring("Connect", "Enter Host IP Address (e.g., 192.168.1.5):")
+        
+        ip_info = self.custom_input_popup("CONNECTION SETUP", "Enter Host IP Address:")
+        
         if not ip_info: return
+        
         self.show_wait_screen(f"Connecting to {ip_info}...")
         threading.Thread(target=self.client_thread, args=(ip_info,), daemon=True).start()
 
+    def custom_input_popup(self, title, prompt):
+        popup = tk.Toplevel(self.root)
+        popup.title(title)
+        popup.geometry("400x250")
+        popup.configure(bg=COLORS['overlay_bg'])
+        popup.resizable(False, False)
+        
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 200
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 125
+        popup.geometry(f"+{x}+{y}")
+
+        result_var = tk.StringVar()
+        self.popup_result = None
+
+        tk.Label(popup, text=title, font=("Segoe UI", 16, "bold"), 
+                 bg=COLORS['overlay_bg'], fg=COLORS['accent_x']).pack(pady=(20, 10))
+        
+        tk.Label(popup, text=prompt, font=("Segoe UI", 11), 
+                 bg=COLORS['overlay_bg'], fg=COLORS['fg']).pack(pady=5)
+
+        entry = tk.Entry(popup, font=("Segoe UI", 14), justify='center', 
+                         bg=COLORS['btn_bg'], fg="white", insertbackground='white',
+                         bd=2, relief=tk.FLAT)
+        entry.pack(pady=10, ipadx=10, ipady=5)
+        entry.focus_set()
+
+        def on_confirm():
+            self.popup_result = entry.get()
+            popup.destroy()
+
+        def on_cancel():
+            self.popup_result = None
+            popup.destroy()
+
+        popup.bind('<Return>', lambda event: on_confirm())
+
+        btn_frame = tk.Frame(popup, bg=COLORS['overlay_bg'])
+        btn_frame.pack(pady=20)
+
+        HoverButton(btn_frame, text="CONNECT", width=12, bg=COLORS['accent_1'], fg="#1e1e2e",
+                    command=on_confirm).pack(side=tk.LEFT, padx=10)
+        
+        HoverButton(btn_frame, text="CANCEL", width=12, bg=COLORS['btn_bg'], 
+                    command=on_cancel).pack(side=tk.LEFT, padx=10)
+
+        popup.transient(self.root)
+        popup.grab_set()
+        self.root.wait_window(popup)
+        
+        return self.popup_result
+    
+    def show_custom_error(self, title, message):
+        popup = tk.Toplevel(self.root)
+        popup.title("ERROR")
+        popup.geometry("380x220")
+        popup.configure(bg=COLORS['overlay_bg'])
+        popup.resizable(False, False)
+        
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 190
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 110
+        popup.geometry(f"+{x}+{y}")
+
+        tk.Label(popup, text="⚠", font=("Segoe UI", 40), 
+                 bg=COLORS['overlay_bg'], fg="#ff5555").pack(pady=(10, 0))
+        
+        tk.Label(popup, text=title, font=("Segoe UI", 14, "bold"), 
+                 bg=COLORS['overlay_bg'], fg="#ff5555").pack()
+
+        tk.Label(popup, text=message, font=("Segoe UI", 11), wraplength=350,
+                 bg=COLORS['overlay_bg'], fg=COLORS['fg']).pack(pady=10)
+
+        def on_close():
+            popup.destroy()
+            
+        btn_frame = tk.Frame(popup, bg=COLORS['overlay_bg'])
+        btn_frame.pack(pady=10)
+        
+        HoverButton(btn_frame, text="OK", width=10, bg="#ff5555", fg="white", hover_bg="#ff7777",
+                    command=on_close).pack()
+
+        popup.transient(self.root)
+        popup.grab_set()
+        self.root.wait_window(popup)
+    
+    def show_win_popup(self, winner_name, can_rematch):
+        popup = tk.Toplevel(self.root)
+        popup.title("VICTORY!")
+        popup.geometry("400x300")
+        popup.configure(bg=COLORS['overlay_bg'])
+        popup.resizable(False, False)
+        
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 200
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 150
+        popup.geometry(f"+{x}+{y}")
+
+        self.win_choice = False 
+
+        tk.Label(popup, text="🏆", font=("Segoe UI", 60), 
+                 bg=COLORS['overlay_bg'], fg="#f1c40f").pack(pady=(10, 0))
+        
+        tk.Label(popup, text="WINNER!", font=("Segoe UI", 12, "bold", "italic"), 
+                 bg=COLORS['overlay_bg'], fg="#f1c40f").pack()
+
+        tk.Label(popup, text=winner_name, font=("Segoe UI", 22, "bold"), 
+                 bg=COLORS['overlay_bg'], fg=COLORS['accent_1']).pack(pady=(5, 20))
+
+        def on_restart():
+            self.win_choice = True
+            popup.destroy()
+
+        def on_menu():
+            self.win_choice = False
+            popup.destroy()
+
+        btn_frame = tk.Frame(popup, bg=COLORS['overlay_bg'])
+        btn_frame.pack(pady=10)
+
+        if can_rematch:
+            HoverButton(btn_frame, text="↻ PLAY AGAIN", width=14, 
+                        bg=COLORS['accent_1'], fg="#1e1e2e", hover_bg="#89e389",
+                        command=on_restart).pack(side=tk.LEFT, padx=10)
+            
+            HoverButton(btn_frame, text="MENU", width=10, 
+                        bg=COLORS['btn_bg'], command=on_menu).pack(side=tk.LEFT, padx=10)
+        else:
+            HoverButton(btn_frame, text="OK", width=15, 
+                        bg=COLORS['accent_1'], fg="#1e1e2e",
+                        command=on_menu).pack()
+
+        popup.transient(self.root)
+        popup.grab_set()
+        self.root.wait_window(popup)
+        
+        return self.win_choice
+
     def show_wait_screen(self, msg):
-        f = self.frames["Online_Wait"]
-        for w in f.winfo_children(): w.destroy()
-        tk.Label(f, text=msg, font=("Arial", 14)).pack(pady=50)
-        tk.Button(f, text="Cancel / Back", command=self.cancel_online_wait).pack(pady=20)
+        f = self.clear_frame("Online_Wait")
+        tk.Label(f, text=msg, font=FONTS['sub'], 
+                 bg=COLORS['bg'], fg=COLORS['accent_2']).pack(pady=100)
+        
+        tk.Label(f, text="●  ●  ●", font=("Arial", 20), 
+                 bg=COLORS['bg'], fg=COLORS['fg']).pack(pady=10)
+        
+        HoverButton(f, text="Cancel", width=15, bg="#45475a", 
+                    command=self.cancel_online_wait).pack(pady=50)
         self.show_frame("Online_Wait")
 
     def cancel_online_wait(self):
@@ -308,7 +675,6 @@ class AllInOneApp:
             self.socket = None
         self.show_frame("Online_Menu")
 
-    # --- NETWORKING ---
     def server_thread(self):
         try:
             srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -324,18 +690,20 @@ class AllInOneApp:
     def client_thread(self, ip):
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(5) 
             self.socket.connect((ip, PORT))
+            self.socket.settimeout(None)
+            
             msg = self.socket.recv(1024).decode()
             if msg == "CONNECTED":
                 self.root.after(0, lambda: self.prep_names('ONLINE'))
                 self.listen_thread()
         except:
-            self.root.after(0, lambda: messagebox.showerror("Error", "Connection Failed. Check IP."))
+            self.root.after(0, lambda: self.show_custom_error("CONNECTION FAILED", f"Could not connect to host at:\n{ip}\n\nCheck IP address or try again."))
             self.root.after(0, lambda: self.show_frame("Online_Menu"))
 
     def listen_thread(self):
-        t = threading.Thread(target=self.network_listener, daemon=True)
-        t.start()
+        threading.Thread(target=self.network_listener, daemon=True).start()
 
     def network_listener(self):
         while True:
@@ -356,7 +724,7 @@ class AllInOneApp:
                 self.root.after(0, lambda: self.show_frame("Off_Size"))
                 self.root.after(0, self.override_size_buttons_for_online)
             else:
-                self.root.after(0, lambda: self.show_wait_screen("Waiting for Host to select size..."))
+                self.root.after(0, lambda: self.show_wait_screen("Waiting for Host to pick size..."))
         elif cmd == "SIZE":
             self.n = int(parts[1])
             self.root.after(0, self.start_game)
@@ -372,9 +740,10 @@ class AllInOneApp:
     def override_size_buttons_for_online(self):
         f = self.frames["Off_Size"]
         for w in f.winfo_children():
-            if w['text'] == "Back": w.pack_forget()
+            if isinstance(w, HoverButton) and "Back" in w['text']: w.pack_forget()
+        
         for widget in f.winfo_children():
-            if isinstance(widget, tk.Button) and "x" in widget['text']:
+            if isinstance(widget, HoverButton) and "x" in widget['text']:
                 size = int(widget['text'][0])
                 widget.config(command=lambda s=size: self.send_size_config(s))
 
@@ -383,32 +752,34 @@ class AllInOneApp:
         self.socket.send(f"SIZE,{size};".encode())
         self.start_game()
 
-    # --- NAME SCREEN ---
     def setup_name_screen(self):
-        f = self.frames["NameEntry"]
-        for w in f.winfo_children(): w.destroy()
+        f = self.clear_frame("NameEntry")
+        tk.Label(f, text="PLAYER NAMES", font=FONTS['header'], 
+                 bg=COLORS['bg'], fg=COLORS['fg']).pack(pady=40)
         
-        tk.Label(f, text="Enter Name", font=("Arial", 18)).pack(pady=20)
-        tk.Label(f, text="Your Name:").pack()
-        e1 = tk.Entry(f); e1.pack(pady=5); e1.insert(0, "Player 1")
+        tk.Label(f, text="Your Name:", bg=COLORS['bg'], fg=COLORS['fg']).pack()
+        e1 = tk.Entry(f, font=("Segoe UI", 12), justify='center', 
+                      bg="#45475a", fg="white", insertbackground='white')
+        e1.pack(pady=5, ipadx=10, ipady=5); e1.insert(0, "Player 1")
         
         e2 = None
         if self.mode == 'OFFLINE' and self.off_submode == 'PvP':
-            tk.Label(f, text="Player 2 Name:").pack()
-            e2 = tk.Entry(f); e2.pack(pady=5); e2.insert(0, "Player 2")
+            tk.Label(f, text="Opponent Name:", bg=COLORS['bg'], fg=COLORS['fg']).pack(pady=(20,0))
+            e2 = tk.Entry(f, font=("Segoe UI", 12), justify='center', 
+                          bg="#45475a", fg="white", insertbackground='white')
+            e2.pack(pady=5, ipadx=10, ipady=5); e2.insert(0, "Player 2")
             
-        tk.Button(f, text="Start / Ready", font=("Arial", 14), bg="#cfc",
-                  command=lambda: self.submit_names(e1.get(), e2.get() if e2 else None)).pack(pady=20)
+        HoverButton(f, text="START GAME", width=20, bg=COLORS['accent_1'], 
+                    fg="#1e1e2e", hover_bg="#a6e3a1",
+                    command=lambda: self.submit_names(e1.get(), e2.get() if e2 else None)).pack(pady=40)
         
-        # Back Logic updated to return to correct screen
-        tk.Button(f, text="Back", command=self.go_back_from_names).pack(pady=10)
+        HoverButton(f, text="← Back", width=10, bg="#45475a", 
+                    command=self.go_back_from_names).pack(pady=10)
 
     def go_back_from_names(self):
         if self.mode == 'OFFLINE':
-            if self.off_submode == 'AI':
-                self.show_frame("Off_Diff") # Go back to difficulty
-            else:
-                self.show_frame("Off_Mode")
+            if self.off_submode == 'AI': self.show_frame("Off_Diff")
+            else: self.show_frame("Off_Mode")
         else:
             if self.socket:
                 try: self.socket.close()
@@ -420,15 +791,14 @@ class AllInOneApp:
         self.p1_name = n1
         if self.mode == 'OFFLINE':
             if self.off_submode == 'AI':
-                self.p2_name = f"AI ({self.ai_difficulty.capitalize()})"
+                self.p2_name = f"AI ({self.ai_difficulty})"
             else:
                 self.p2_name = n2
             self.start_game()
         else:
             self.socket.send(f"NAME,{n1};".encode())
-            self.show_wait_screen("Waiting for Opponent Name...")
+            self.show_wait_screen("Waiting for Opponent...")
 
-    # --- GAMEPLAY ---
     def start_game(self):
         if self.game is None: 
             self.score_x = 0
@@ -453,29 +823,53 @@ class AllInOneApp:
             threading.Thread(target=self.ai_move, daemon=True).start()
 
     def setup_game_board(self):
-        f = self.frames["Game"]
-        for w in f.winfo_children(): w.destroy()
+        f = self.clear_frame("Game")
         
-        score_text = f"Score: {self.score_x} - {self.score_o}"
-        tk.Label(f, text=score_text, font=("Arial", 20, "bold"), fg="#333").pack(pady=5)
+        score_frame = tk.Frame(f, bg=COLORS['bg'])
+        score_frame.pack(pady=20, fill='x')
         
-        info = f"{self.p1_name} (Me)" if self.mode=='ONLINE' else f"{self.p1_name} vs {self.p2_name}"
-        tk.Label(f, text=info, font=("Arial", 12)).pack(pady=2)
+        f_p1 = tk.Frame(score_frame, bg=COLORS['bg'])
+        f_p1.pack(side=tk.LEFT, padx=20, expand=True)
+        tk.Label(f_p1, text=self.p1_name, font=("Segoe UI", 12), fg=COLORS['accent_x'], bg=COLORS['bg']).pack()
+        self.lbl_score_x = tk.Label(f_p1, text=str(self.score_x), font=("Segoe UI", 24, "bold"), fg=COLORS['accent_x'], bg=COLORS['bg'])
+        self.lbl_score_x.pack()
         
-        self.lbl_status = tk.Label(f, text="Game Start", font=("Arial", 14, "bold"))
+        tk.Label(score_frame, text="VS", font=("Segoe UI", 14), fg="#585b70", bg=COLORS['bg']).pack(side=tk.LEFT)
+        
+        f_p2 = tk.Frame(score_frame, bg=COLORS['bg'])
+        f_p2.pack(side=tk.RIGHT, padx=20, expand=True)
+        tk.Label(f_p2, text=self.p2_name, font=("Segoe UI", 12), fg=COLORS['accent_o'], bg=COLORS['bg']).pack()
+        self.lbl_score_o = tk.Label(f_p2, text=str(self.score_o), font=("Segoe UI", 24, "bold"), fg=COLORS['accent_o'], bg=COLORS['bg'])
+        self.lbl_score_o.pack()
+
+        self.lbl_status = tk.Label(f, text="Game Start", font=("Segoe UI", 16), bg=COLORS['bg'], fg=COLORS['fg'])
         self.lbl_status.pack(pady=5)
         
-        container = tk.Frame(f); container.pack(pady=10)
+        grid_frame = tk.Frame(f, bg=COLORS['bg'])
+        grid_frame.pack(pady=10)
+        
         self.btns = []
         for i in range(self.n * self.n):
-            b = tk.Button(container, text=EMPTY, font=('Arial', 18, 'bold'), width=4, height=2,
+            b = tk.Button(grid_frame, text=EMPTY, font=FONTS['game'], width=4, height=2,
+                          bg=COLORS['btn_bg'], fg=COLORS['btn_text'],
+                          relief=tk.FLAT, bd=0, activebackground=COLORS['btn_hover'],
                           command=lambda idx=i: self.on_click(idx))
-            b.grid(row=i//self.n, column=i%self.n, padx=2, pady=2)
+            b.grid(row=i//self.n, column=i%self.n, padx=3, pady=3)
             self.btns.append(b)
         
-        tk.Button(f, text="Restart Match", command=self.trigger_restart_confirm).pack(pady=5)
-        tk.Button(f, text="Main Menu", command=self.quit_to_menu).pack(pady=5)
-        tk.Label(f, text=f"FIFO Rule: Max {self.n} pieces.", fg="gray").pack()
+        footer = tk.Frame(f, bg=COLORS['bg'])
+        footer.pack(side=tk.BOTTOM, pady=20)
+        
+        tk.Label(footer, text=f"FIFO RULE: Only {self.n} pieces allowed.", 
+                 font=("Segoe UI", 10, "italic"), fg="#6c7086", bg=COLORS['bg']).pack(pady=5)
+        
+        h_btn_frame = tk.Frame(footer, bg=COLORS['bg'])
+        h_btn_frame.pack()
+        
+        HoverButton(h_btn_frame, text="Restart", width=12, bg=COLORS['btn_bg'], 
+                    command=self.trigger_restart_confirm).pack(side=tk.LEFT, padx=5)
+        HoverButton(h_btn_frame, text="Menu", width=12, bg="#f38ba8", fg="#1e1e2e", hover_bg="#eba0ac", 
+                    command=self.quit_to_menu).pack(side=tk.LEFT, padx=5)
 
     def quit_to_menu(self):
         if self.socket:
@@ -522,25 +916,35 @@ class AllInOneApp:
     def update_status(self):
         if not self.game_running: return
         if self.mode == 'ONLINE':
-            txt = "YOUR TURN" if not self.turn_lock else "OPPONENT'S TURN"
-            col = "green" if not self.turn_lock else "red"
+            if not self.turn_lock:
+                txt = "YOUR TURN"
+                col = COLORS['accent_1']
+            else:
+                txt = "OPPONENT'S TURN"
+                col = COLORS['accent_2']
         else:
             p = self.p1_name if self.curr_player == PLAYER_X else self.p2_name
             txt = f"{p}'s Turn ({self.curr_player})"
-            col = "blue" if self.curr_player == PLAYER_X else "red"
+            col = COLORS['accent_x'] if self.curr_player == PLAYER_X else COLORS['accent_o']
         self.lbl_status.config(text=txt, fg=col)
 
     def update_ui(self):
         for i, val in enumerate(self.game.board):
-            self.btns[i].config(text=val, bg="#f0f0f0")
-            if val == PLAYER_X: self.btns[i].config(fg="blue")
-            elif val == PLAYER_O: self.btns[i].config(fg="red")
+            btn = self.btns[i]
+            btn.config(text=val)
+            if val == PLAYER_X:
+                btn.config(fg=COLORS['accent_x'], bg=COLORS['btn_bg'])
+            elif val == PLAYER_O:
+                btn.config(fg=COLORS['accent_o'], bg=COLORS['btn_bg'])
+            else:
+                btn.config(fg=COLORS['fg'], bg=COLORS['btn_bg'])
+        
         q = self.game.move_queues[self.curr_player]
-        if len(q) == self.n: self.btns[q[0]].config(bg="#ffcccb")
+        if len(q) == self.n:
+            self.btns[q[0]].config(bg=COLORS['fifo_fade'], fg="#ffffff")
 
     def ai_move(self):
         time.sleep(0.5)
-        # Pass the selected difficulty to the AI logic
         move = self.game.best_move_ai(self.ai_difficulty)
         if move is not None: self.root.after(0, lambda: self.finalize_ai(move))
 
@@ -556,20 +960,35 @@ class AllInOneApp:
         self.game_running = False
         if winner_char == PLAYER_X: self.score_x += 1
         else: self.score_o += 1
-        msg = f"Player {winner_char} Wins!"
-        self.lbl_status.config(text=msg, fg="purple")
-        play_again = messagebox.askyesno("Game Over", f"{msg}\n\nPlay Again?")
-        if play_again: self.trigger_restart()
+        self.update_scores()
+        
+        winner_name = self.p1_name if winner_char == PLAYER_X else self.p2_name
+        self.lbl_status.config(text=f"{winner_name} Wins!", fg=COLORS['accent_1'])
+        
+        play_again = self.show_win_popup(winner_name, can_rematch=True)
+        
+        if play_again:
+            self.trigger_restart()
+        else:
+            self.quit_to_menu()
 
     def game_over_remote(self, winner_char):
         self.game_running = False
         if winner_char == PLAYER_X: self.score_x += 1
         else: self.score_o += 1
-        self.lbl_status.config(text="Game Over", fg="red")
-        messagebox.showinfo("Game Over", f"Player {winner_char} Won!")
+        self.update_scores()
+        
+        winner_name = self.p1_name if winner_char == PLAYER_X else self.p2_name
+        self.lbl_status.config(text=f"{winner_name} Won!", fg=COLORS['accent_o'])
+        
+        self.show_win_popup(winner_name, can_rematch=False)
+
+    def update_scores(self):
+        self.lbl_score_x.config(text=str(self.score_x))
+        self.lbl_score_o.config(text=str(self.score_o))
 
     def trigger_restart_confirm(self):
-        if messagebox.askyesno("Restart", "Are you sure you want to restart?"):
+        if messagebox.askyesno("Restart", "Are you sure?"):
             self.trigger_restart()
 
     def trigger_restart(self):
@@ -579,5 +998,5 @@ class AllInOneApp:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = AllInOneApp(root)
+    app = ModernApp(root)
     root.mainloop()
