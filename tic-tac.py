@@ -4,6 +4,7 @@ import socket
 import threading
 import time
 import math
+import random  # --- NEW: Required for randomizing the starter ---
 
 # --- Constants ---
 PLAYER_X = 'X'
@@ -95,7 +96,7 @@ class AllInOneApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Tic-Tac-Toe LAN Multiplayer")
-        self.root.geometry("500x650")
+        self.root.geometry("500x700")  # Increased height slightly for score labels
         
         self.mode = None
         self.game = None
@@ -106,6 +107,10 @@ class AllInOneApp:
         self.p2_name = "Player 2"
         self.turn_lock = False
         self.n = 3
+        
+        # --- NEW: SCORE SYSTEM VARIABLES ---
+        self.score_x = 0
+        self.score_o = 0
         
         self.frames = {}
         for f in ["MainMenu", "Off_Size", "Off_Mode", "NameEntry", "Online_Menu", "Online_Wait", "Game"]:
@@ -280,7 +285,13 @@ class AllInOneApp:
             idx = int(parts[1])
             self.root.after(0, lambda: self.apply_remote_move(idx))
         elif cmd == "WIN":
-            self.root.after(0, lambda: self.game_over_remote())
+            # Opponent tells us they won (or we won from their perspective)
+            # The message is "WIN,X" meaning X won.
+            winner_char = parts[1] 
+            self.root.after(0, lambda: self.game_over_remote(winner_char))
+        # --- NEW: RESTART COMMAND ---
+        elif cmd == "RESTART":
+            self.root.after(0, self.reset_match)
 
     def override_size_buttons_for_online(self):
         f = self.frames["Off_Size"]
@@ -338,20 +349,51 @@ class AllInOneApp:
 
     # --- GAMEPLAY ---
     def start_game(self):
+        # Reset scores when a completely NEW game starts (not restart)
+        # If you want scores to persist even after going back to menu, move these lines to __init__
+        # But usually 'Start Game' means 0-0
+        if self.game is None: 
+            self.score_x = 0
+            self.score_o = 0
+            
+        self.reset_match()
+        self.show_frame("Game")
+
+    def reset_match(self):
+        # Initializes a fresh board but keeps scores
         self.game = GameLogic(self.n)
-        self.curr_player = PLAYER_X
+        
+        # --- NEW: RANDOM START FOR OFFLINE ---
+        # In Offline mode, we randomly pick who moves first.
+        # In Online mode, we keep Standard (Host=X starts) to prevent desync unless we change protocol.
+        if self.mode == 'OFFLINE':
+            self.curr_player = random.choice([PLAYER_X, PLAYER_O])
+        else:
+            self.curr_player = PLAYER_X
+        # -------------------------------------
+        
         self.game_running = True
         self.turn_lock = (self.mode == 'ONLINE' and not self.is_host)
+        
         self.setup_game_board()
-        self.show_frame("Game")
         self.update_status()
+
+        # --- NEW: TRIGGER AI IF IT STARTS ---
+        # If we are Offline, playing Vs AI, and the randomizer picked 'O' (AI's role) to start:
+        if self.mode == 'OFFLINE' and getattr(self, 'off_submode', '') == 'AI' and self.curr_player == PLAYER_O:
+            threading.Thread(target=self.ai_move, daemon=True).start()
 
     def setup_game_board(self):
         f = self.frames["Game"]
         for w in f.winfo_children(): w.destroy()
         
+        # --- NEW: SCORE LABELS ---
+        score_text = f"Score: {self.score_x} - {self.score_o}"
+        tk.Label(f, text=score_text, font=("Arial", 20, "bold"), fg="#333").pack(pady=5)
+        
         info = f"{self.p1_name} (Me)" if self.mode=='ONLINE' else f"{self.p1_name} vs {self.p2_name}"
-        tk.Label(f, text=info, font=("Arial", 12)).pack(pady=5)
+        tk.Label(f, text=info, font=("Arial", 12)).pack(pady=2)
+        
         self.lbl_status = tk.Label(f, text="Game Start", font=("Arial", 14, "bold"))
         self.lbl_status.pack(pady=5)
         
@@ -363,7 +405,9 @@ class AllInOneApp:
             b.grid(row=i//self.n, column=i%self.n, padx=2, pady=2)
             self.btns.append(b)
         
-        tk.Button(f, text="Main Menu", command=self.quit_to_menu).pack(pady=10)
+        # New Reset Button (Optional, but good UX)
+        tk.Button(f, text="Restart Match", command=self.trigger_restart_confirm).pack(pady=5)
+        tk.Button(f, text="Main Menu", command=self.quit_to_menu).pack(pady=5)
         tk.Label(f, text=f"FIFO Rule: Max {self.n} pieces.", fg="gray").pack()
 
     def quit_to_menu(self):
@@ -371,6 +415,7 @@ class AllInOneApp:
             try: self.socket.close()
             except: pass
             self.socket = None
+        self.game = None # Clear game so scores reset next time
         self.show_frame("MainMenu")
 
     def on_click(self, idx):
@@ -387,8 +432,10 @@ class AllInOneApp:
             self.turn_lock = True
 
         if self.game.check_winner(self.curr_player):
-            self.game_over_local(True)
-            if self.mode == 'ONLINE': self.socket.send(f"WIN,{self.curr_player};".encode())
+            # Pass who won to the game_over function
+            self.game_over_local(self.curr_player)
+            if self.mode == 'ONLINE': 
+                self.socket.send(f"WIN,{self.curr_player};".encode())
             return
 
         self.switch_turn()
@@ -434,23 +481,56 @@ class AllInOneApp:
         self.game.make_move(move, PLAYER_O)
         self.update_ui()
         if self.game.check_winner(PLAYER_O):
-            self.game_over_local(False)
+            self.game_over_local(PLAYER_O)
             return
         self.switch_turn()
 
-    def game_over_local(self, i_won):
-        self.game_running = False
-        msg = "You Won!" if i_won else "You Lost!"
-        if self.mode == 'OFFLINE': msg = f"{self.p1_name if self.curr_player==PLAYER_X else self.p2_name} Wins!"
-        self.lbl_status.config(text=msg, fg="purple")
-        messagebox.showinfo("Game Over", msg)
+    # --- NEW: GAME OVER & RESTART LOGIC ---
 
-    def game_over_remote(self):
+    def game_over_local(self, winner_char):
         self.game_running = False
-        self.lbl_status.config(text="You Lost!", fg="red")
-        messagebox.showinfo("Game Over", "Opponent Won!")
+        
+        # Update Score
+        if winner_char == PLAYER_X: self.score_x += 1
+        else: self.score_o += 1
+        
+        msg = f"Player {winner_char} Wins!"
+        self.lbl_status.config(text=msg, fg="purple")
+        
+        # Ask for restart
+        play_again = messagebox.askyesno("Game Over", f"{msg}\n\nPlay Again?")
+        if play_again:
+            self.trigger_restart()
+        else:
+            pass # Stay on the finished board
+
+    def game_over_remote(self, winner_char):
+        self.game_running = False
+        
+        # Update Score based on what opponent sent
+        if winner_char == PLAYER_X: self.score_x += 1
+        else: self.score_o += 1
+        
+        self.lbl_status.config(text="Game Over", fg="red")
+        
+        # We don't ask the loser/receiver to restart immediately to avoid double popups.
+        # We wait for the winner (or anyone) to click Restart.
+        # OR we can just show info.
+        messagebox.showinfo("Game Over", f"Player {winner_char} Won!")
+
+    def trigger_restart_confirm(self):
+        # Manually clicking the Restart Button
+        if messagebox.askyesno("Restart", "Are you sure you want to restart?"):
+            self.trigger_restart()
+
+    def trigger_restart(self):
+        # Execute restart locally and send signal if online
+        self.reset_match()
+        if self.mode == 'ONLINE':
+            self.socket.send("RESTART;".encode())
 
 if __name__ == "__main__":
     root = tk.Tk()
     app = AllInOneApp(root)
     root.mainloop()
+
