@@ -24,7 +24,8 @@ COLORS = {
     'accent_2': '#fab387',  # Orange
     'fifo_fade': '#585b70',
     'overlay_bg': '#282a36',
-    'win_gold': '#f1c40f'
+    'win_gold': '#f1c40f',
+    'draw_gray': '#a6adc8'  # New color for draw state
 }
 
 FONTS = {
@@ -42,6 +43,24 @@ class GameLogic:
         self.total_cells = n * n
         self.board = [EMPTY] * self.total_cells
         self.move_queues = {PLAYER_X: [], PLAYER_O: []}
+        
+        # --- NEW: Track board states for repetition ---
+        self.state_history = {} 
+
+    def record_state(self):
+        """
+        Records the current board state.
+        Returns True if this state has occurred 3 times (Draw).
+        """
+        # Convert board list to tuple so it can be used as a dictionary key
+        current_state = tuple(self.board)
+        
+        if current_state in self.state_history:
+            self.state_history[current_state] += 1
+        else:
+            self.state_history[current_state] = 1
+            
+        return self.state_history[current_state] >= 3
 
     def check_winner(self, player):
         n = self.n
@@ -342,7 +361,7 @@ class ModernApp:
             "• Objective: Get N symbols in a row/col/diag.",
             f"• FIFO Rule: Max N pieces per player allowed.",
             "• Placing the (N+1)th piece removes your oldest.",
-            "• Strategy: Trap opponent while saving your pieces!"
+            "• Draw: 3x same moves = 1 point each!"
         ]
         for rule in rules:
             tk.Label(rules_frame, text=rule, font=FONTS['rules'], 
@@ -368,7 +387,7 @@ class ModernApp:
             dx, dy = random.uniform(-1, 1), random.uniform(1, 4)
         elif side == 'bottom': 
             x, y = random.randint(0, w), h+50
-            dx, dy = random.uniform(-1, 1), random.uniform(-4, -1)
+            dx, dy = random.uniform(-4, -1), random.uniform(-4, -1)
         elif side == 'left': 
             x, y = -50, random.randint(0, h)
             dx, dy = random.uniform(1, 4), random.uniform(-1, 1)
@@ -660,7 +679,7 @@ class ModernApp:
     # --- NEW ANIMATED WIN SCREEN (With Confetti) ---
     def show_win_popup(self, winner_name, can_rematch):
         popup = tk.Toplevel(self.root)
-        popup.title("VICTORY!")
+        popup.title("GAME OVER")
         popup.geometry("450x350")
         popup.configure(bg=COLORS['overlay_bg'])
         popup.resizable(False, False)
@@ -675,8 +694,21 @@ class ModernApp:
 
         # Confetti Logic
         confetti = []
-        colors = [COLORS['accent_x'], COLORS['accent_o'], COLORS['accent_1'], COLORS['accent_2'], '#f1c40f']
         
+        # Check if it's a Draw or Win for colors
+        is_draw = "DRAW" in winner_name
+        
+        if is_draw:
+             colors = [COLORS['fg'], COLORS['fifo_fade'], '#a6adc8']
+             icon = "🤝"
+             title_text = "IT'S A DRAW!"
+             title_color = COLORS['draw_gray']
+        else:
+            colors = [COLORS['accent_x'], COLORS['accent_o'], COLORS['accent_1'], COLORS['accent_2'], '#f1c40f']
+            icon = "🏆"
+            title_text = "VICTORY!"
+            title_color = COLORS['win_gold']
+
         for _ in range(50):
             cx = random.randint(0, 450)
             cy = random.randint(-200, 0)
@@ -701,13 +733,13 @@ class ModernApp:
         content_frame = tk.Frame(popup, bg=COLORS['overlay_bg'])
         content_frame.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(content_frame, text="🏆", font=("Segoe UI", 60), 
-                 bg=COLORS['overlay_bg'], fg=COLORS['win_gold']).pack(pady=(10, 0))
+        tk.Label(content_frame, text=icon, font=("Segoe UI", 60), 
+                 bg=COLORS['overlay_bg'], fg=title_color).pack(pady=(10, 0))
         
-        tk.Label(content_frame, text="VICTORY!", font=("Segoe UI", 14, "bold", "italic"), 
-                 bg=COLORS['overlay_bg'], fg=COLORS['win_gold']).pack()
+        tk.Label(content_frame, text=title_text, font=("Segoe UI", 14, "bold", "italic"), 
+                 bg=COLORS['overlay_bg'], fg=title_color).pack()
 
-        tk.Label(content_frame, text=f"{winner_name} Wins!", font=("Segoe UI", 24, "bold"), 
+        tk.Label(content_frame, text=f"{winner_name}", font=("Segoe UI", 24, "bold"), 
                  bg=COLORS['overlay_bg'], fg="#ffffff").pack(pady=(5, 20))
 
         self.win_choice = False 
@@ -1003,10 +1035,19 @@ class ModernApp:
         self.game.make_move(idx, self.curr_player)
         self.update_ui()
         
+        # Sync move online before ending game
         if self.mode == 'ONLINE':
             self.socket.send(f"MOVE,{idx};".encode())
             self.turn_lock = True
 
+        # 1. Check Draw first (Threefold repetition)
+        if self.game.record_state():
+            if self.mode == 'ONLINE':
+                self.socket.send(f"WIN,DRAW;".encode())
+            self.game_over_local("DRAW")
+            return
+
+        # 2. Check Win
         if self.game.check_winner(self.curr_player):
             self.game_over_local(self.curr_player)
             if self.mode == 'ONLINE': 
@@ -1021,6 +1062,12 @@ class ModernApp:
         opp = PLAYER_O if self.my_role == PLAYER_X else PLAYER_X
         self.game.make_move(idx, opp)
         self.update_ui()
+        
+        # Remote Repetition Check
+        if self.game.record_state():
+            self.game_over_local("DRAW")
+            return
+
         self.switch_turn()
         self.turn_lock = False
 
@@ -1066,6 +1113,12 @@ class ModernApp:
     def finalize_ai(self, move):
         self.game.make_move(move, PLAYER_O)
         self.update_ui()
+        
+        # Check AI Draw
+        if self.game.record_state():
+            self.game_over_local("DRAW")
+            return
+
         if self.game.check_winner(PLAYER_O):
             self.game_over_local(PLAYER_O)
             return
@@ -1073,17 +1126,27 @@ class ModernApp:
 
     def game_over_local(self, winner_char):
         self.game_running = False
-        if winner_char == PLAYER_X: self.score_x += 1
-        else: self.score_o += 1
-        self.update_scores()
         
-        if self.mode == 'ONLINE' and not self.is_host:
-             if winner_char == PLAYER_X: winner_name = self.p2_name 
-             else: winner_name = self.p1_name 
+        if winner_char == "DRAW":
+            winner_name = "DRAW (Repetition)"
+            self.score_x += 1
+            self.score_o += 1
         else:
-             winner_name = self.p1_name if winner_char == PLAYER_X else self.p2_name
+            if winner_char == PLAYER_X: self.score_x += 1
+            else: self.score_o += 1
+            
+            if self.mode == 'ONLINE' and not self.is_host:
+                 if winner_char == PLAYER_X: winner_name = self.p2_name 
+                 else: winner_name = self.p1_name 
+            else:
+                 winner_name = self.p1_name if winner_char == PLAYER_X else self.p2_name
 
-        self.lbl_status.config(text=f"{winner_name} Wins!", fg=COLORS['accent_1'])
+        self.update_scores()
+
+        if winner_char == "DRAW":
+            self.lbl_status.config(text="DRAW!", fg=COLORS['draw_gray'])
+        else:
+            self.lbl_status.config(text=f"{winner_name} Wins!", fg=COLORS['accent_1'])
         
         # New: Uses the fancy popup with confetti
         play_again = self.show_win_popup(winner_name, can_rematch=True)
@@ -1095,17 +1158,27 @@ class ModernApp:
 
     def game_over_remote(self, winner_char):
         self.game_running = False
-        if winner_char == PLAYER_X: self.score_x += 1
-        else: self.score_o += 1
-        self.update_scores()
         
-        if self.mode == 'ONLINE' and not self.is_host:
-             if winner_char == PLAYER_X: winner_name = self.p2_name
-             else: winner_name = self.p1_name
+        if winner_char == "DRAW":
+            winner_name = "DRAW (Repetition)"
+            self.score_x += 1
+            self.score_o += 1
         else:
-             winner_name = self.p1_name if winner_char == PLAYER_X else self.p2_name
+            if winner_char == PLAYER_X: self.score_x += 1
+            else: self.score_o += 1
+            
+            if self.mode == 'ONLINE' and not self.is_host:
+                 if winner_char == PLAYER_X: winner_name = self.p2_name
+                 else: winner_name = self.p1_name
+            else:
+                 winner_name = self.p1_name if winner_char == PLAYER_X else self.p2_name
 
-        self.lbl_status.config(text=f"{winner_name} Won!", fg=COLORS['accent_o'])
+        self.update_scores()
+
+        if winner_char == "DRAW":
+             self.lbl_status.config(text="DRAW!", fg=COLORS['draw_gray'])
+        else:
+             self.lbl_status.config(text=f"{winner_name} Won!", fg=COLORS['accent_o'])
         
         # New: Uses the fancy popup with confetti
         self.show_win_popup(winner_name, can_rematch=False)
