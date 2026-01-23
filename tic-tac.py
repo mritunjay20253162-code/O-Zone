@@ -11,18 +11,20 @@ PLAYER_O = 'O'
 EMPTY = ' '
 PORT = 9999
 
+# --- COLOR PALETTE (Dracula/Modern Dark) ---
 COLORS = {
     'bg': '#1e1e2e',
     'fg': '#cdd6f4',
     'btn_bg': '#313244',
     'btn_hover': '#45475a',
     'btn_text': '#ffffff',
-    'accent_x': '#89b4fa',
-    'accent_o': '#f38ba8',
-    'accent_1': '#a6e3a1',
-    'accent_2': '#fab387',
+    'accent_x': '#89b4fa',  # Blue
+    'accent_o': '#f38ba8',  # Red/Pink
+    'accent_1': '#a6e3a1',  # Green
+    'accent_2': '#fab387',  # Orange
     'fifo_fade': '#585b70',
-    'overlay_bg': '#282a36'
+    'overlay_bg': '#282a36',
+    'win_gold': '#f1c40f'
 }
 
 FONTS = {
@@ -170,6 +172,10 @@ class ModernApp:
         self.score_x = 0
         self.score_o = 0
         self.ai_difficulty = 'HARD'
+        
+        # Sync Flags
+        self.name_submitted = False
+        self.opponent_name_received = False
         
         self.animating = False
         self.particles = []
@@ -475,6 +481,8 @@ class ModernApp:
 
     def prep_names(self, submode):
         self.off_submode = submode
+        self.name_submitted = False
+        self.opponent_name_received = False
         self.setup_name_screen()
         self.show_frame("NameEntry")
 
@@ -605,27 +613,104 @@ class ModernApp:
         popup.grab_set()
         self.root.wait_window(popup)
     
-    def show_win_popup(self, winner_name, can_rematch):
+    # --- NEW STYLISH CONFIRMATION DIALOG (Replaces MessageBox) ---
+    def show_styled_confirm_popup(self, title, message):
         popup = tk.Toplevel(self.root)
-        popup.title("VICTORY!")
-        popup.geometry("400x300")
+        popup.title(title)
+        popup.geometry("380x200")
         popup.configure(bg=COLORS['overlay_bg'])
         popup.resizable(False, False)
         
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 200
-        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 150
+        # Center the popup
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 190
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 100
         popup.geometry(f"+{x}+{y}")
 
-        self.win_choice = False 
+        self.confirm_result = False
 
-        tk.Label(popup, text="🏆", font=("Segoe UI", 60), 
-                 bg=COLORS['overlay_bg'], fg="#f1c40f").pack(pady=(10, 0))
+        tk.Label(popup, text="❓", font=("Segoe UI", 30), 
+                 bg=COLORS['overlay_bg'], fg=COLORS['accent_2']).pack(pady=(15, 0))
         
-        tk.Label(popup, text="WINNER!", font=("Segoe UI", 12, "bold", "italic"), 
-                 bg=COLORS['overlay_bg'], fg="#f1c40f").pack()
+        tk.Label(popup, text=message, font=("Segoe UI", 14), 
+                 bg=COLORS['overlay_bg'], fg=COLORS['fg']).pack(pady=10)
 
-        tk.Label(popup, text=winner_name, font=("Segoe UI", 22, "bold"), 
-                 bg=COLORS['overlay_bg'], fg=COLORS['accent_1']).pack(pady=(5, 20))
+        def on_yes():
+            self.confirm_result = True
+            popup.destroy()
+            
+        def on_no():
+            self.confirm_result = False
+            popup.destroy()
+            
+        btn_frame = tk.Frame(popup, bg=COLORS['overlay_bg'])
+        btn_frame.pack(pady=15)
+        
+        HoverButton(btn_frame, text="YES", width=10, bg=COLORS['accent_1'], fg="#1e1e2e", 
+                    command=on_yes).pack(side=tk.LEFT, padx=15)
+        
+        HoverButton(btn_frame, text="NO", width=10, bg="#ff5555", fg="white", hover_bg="#ff7777",
+                    command=on_no).pack(side=tk.LEFT, padx=15)
+
+        popup.transient(self.root)
+        popup.grab_set()
+        self.root.wait_window(popup)
+        
+        return self.confirm_result
+
+    # --- NEW ANIMATED WIN SCREEN (With Confetti) ---
+    def show_win_popup(self, winner_name, can_rematch):
+        popup = tk.Toplevel(self.root)
+        popup.title("VICTORY!")
+        popup.geometry("450x350")
+        popup.configure(bg=COLORS['overlay_bg'])
+        popup.resizable(False, False)
+        
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 225
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 175
+        popup.geometry(f"+{x}+{y}")
+
+        # Canvas for Confetti
+        canvas = tk.Canvas(popup, bg=COLORS['overlay_bg'], highlightthickness=0)
+        canvas.place(x=0, y=0, relwidth=1, relheight=1)
+
+        # Confetti Logic
+        confetti = []
+        colors = [COLORS['accent_x'], COLORS['accent_o'], COLORS['accent_1'], COLORS['accent_2'], '#f1c40f']
+        
+        for _ in range(50):
+            cx = random.randint(0, 450)
+            cy = random.randint(-200, 0)
+            c_size = random.randint(5, 10)
+            color = random.choice(colors)
+            item = canvas.create_oval(cx, cy, cx+c_size, cy+c_size, fill=color, outline="")
+            confetti.append({'id': item, 'speed': random.randint(2, 6)})
+
+        def animate_confetti():
+            try:
+                for c in confetti:
+                    canvas.move(c['id'], 0, c['speed'])
+                    pos = canvas.coords(c['id'])
+                    if pos[1] > 350:
+                        canvas.move(c['id'], 0, -360)
+                popup.after(30, animate_confetti)
+            except: pass # Popup closed
+
+        animate_confetti()
+
+        # UI Overlay on top of canvas
+        content_frame = tk.Frame(popup, bg=COLORS['overlay_bg'])
+        content_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        tk.Label(content_frame, text="🏆", font=("Segoe UI", 60), 
+                 bg=COLORS['overlay_bg'], fg=COLORS['win_gold']).pack(pady=(10, 0))
+        
+        tk.Label(content_frame, text="VICTORY!", font=("Segoe UI", 14, "bold", "italic"), 
+                 bg=COLORS['overlay_bg'], fg=COLORS['win_gold']).pack()
+
+        tk.Label(content_frame, text=f"{winner_name} Wins!", font=("Segoe UI", 24, "bold"), 
+                 bg=COLORS['overlay_bg'], fg="#ffffff").pack(pady=(5, 20))
+
+        self.win_choice = False 
 
         def on_restart():
             self.win_choice = True
@@ -635,7 +720,7 @@ class ModernApp:
             self.win_choice = False
             popup.destroy()
 
-        btn_frame = tk.Frame(popup, bg=COLORS['overlay_bg'])
+        btn_frame = tk.Frame(content_frame, bg=COLORS['overlay_bg'])
         btn_frame.pack(pady=10)
 
         if can_rematch:
@@ -661,7 +746,7 @@ class ModernApp:
         tk.Label(f, text=msg, font=FONTS['sub'], 
                  bg=COLORS['bg'], fg=COLORS['accent_2']).pack(pady=100)
         
-        tk.Label(f, text="●  ●  ●", font=("Arial", 20), 
+        tk.Label(f, text="●  ●  ●", font=("Arial", 20), 
                  bg=COLORS['bg'], fg=COLORS['fg']).pack(pady=10)
         
         HoverButton(f, text="Cancel", width=15, bg="#45475a", 
@@ -719,12 +804,21 @@ class ModernApp:
         cmd = parts[0]
         if cmd == "NAME":
             self.p2_name = parts[1]
+            self.opponent_name_received = True
+            
             if self.is_host:
-                self.root.after(0, self.setup_off_size)
-                self.root.after(0, lambda: self.show_frame("Off_Size"))
-                self.root.after(0, self.override_size_buttons_for_online)
+                if self.name_submitted:
+                    self.root.after(0, self.setup_off_size)
+                    self.root.after(0, lambda: self.show_frame("Off_Size"))
+                    self.root.after(0, self.override_size_buttons_for_online)
+                else:
+                    pass
             else:
-                self.root.after(0, lambda: self.show_wait_screen("Waiting for Host to pick size..."))
+                if self.name_submitted:
+                    self.root.after(0, lambda: self.show_wait_screen("Waiting for Host to pick size..."))
+                else:
+                    pass
+
         elif cmd == "SIZE":
             self.n = int(parts[1])
             self.root.after(0, self.start_game)
@@ -789,6 +883,8 @@ class ModernApp:
 
     def submit_names(self, n1, n2):
         self.p1_name = n1
+        self.name_submitted = True
+        
         if self.mode == 'OFFLINE':
             if self.off_submode == 'AI':
                 self.p2_name = f"AI ({self.ai_difficulty})"
@@ -797,7 +893,19 @@ class ModernApp:
             self.start_game()
         else:
             self.socket.send(f"NAME,{n1};".encode())
-            self.show_wait_screen("Waiting for Opponent...")
+            
+            if self.is_host:
+                if self.opponent_name_received:
+                    self.setup_off_size()
+                    self.show_frame("Off_Size")
+                    self.override_size_buttons_for_online()
+                else:
+                    self.show_wait_screen("Waiting for Opponent...")
+            else:
+                if self.opponent_name_received:
+                    self.show_wait_screen("Waiting for Host to pick size...")
+                else:
+                    self.show_wait_screen("Waiting for Opponent...")
 
     def start_game(self):
         if self.game is None: 
@@ -828,9 +936,16 @@ class ModernApp:
         score_frame = tk.Frame(f, bg=COLORS['bg'])
         score_frame.pack(pady=20, fill='x')
         
+        if self.mode == 'ONLINE' and not self.is_host:
+            name_left = self.p2_name
+            name_right = self.p1_name
+        else:
+            name_left = self.p1_name
+            name_right = self.p2_name
+
         f_p1 = tk.Frame(score_frame, bg=COLORS['bg'])
         f_p1.pack(side=tk.LEFT, padx=20, expand=True)
-        tk.Label(f_p1, text=self.p1_name, font=("Segoe UI", 12), fg=COLORS['accent_x'], bg=COLORS['bg']).pack()
+        tk.Label(f_p1, text=name_left, font=("Segoe UI", 12), fg=COLORS['accent_x'], bg=COLORS['bg']).pack()
         self.lbl_score_x = tk.Label(f_p1, text=str(self.score_x), font=("Segoe UI", 24, "bold"), fg=COLORS['accent_x'], bg=COLORS['bg'])
         self.lbl_score_x.pack()
         
@@ -838,7 +953,7 @@ class ModernApp:
         
         f_p2 = tk.Frame(score_frame, bg=COLORS['bg'])
         f_p2.pack(side=tk.RIGHT, padx=20, expand=True)
-        tk.Label(f_p2, text=self.p2_name, font=("Segoe UI", 12), fg=COLORS['accent_o'], bg=COLORS['bg']).pack()
+        tk.Label(f_p2, text=name_right, font=("Segoe UI", 12), fg=COLORS['accent_o'], bg=COLORS['bg']).pack()
         self.lbl_score_o = tk.Label(f_p2, text=str(self.score_o), font=("Segoe UI", 24, "bold"), fg=COLORS['accent_o'], bg=COLORS['bg'])
         self.lbl_score_o.pack()
 
@@ -962,9 +1077,15 @@ class ModernApp:
         else: self.score_o += 1
         self.update_scores()
         
-        winner_name = self.p1_name if winner_char == PLAYER_X else self.p2_name
+        if self.mode == 'ONLINE' and not self.is_host:
+             if winner_char == PLAYER_X: winner_name = self.p2_name 
+             else: winner_name = self.p1_name 
+        else:
+             winner_name = self.p1_name if winner_char == PLAYER_X else self.p2_name
+
         self.lbl_status.config(text=f"{winner_name} Wins!", fg=COLORS['accent_1'])
         
+        # New: Uses the fancy popup with confetti
         play_again = self.show_win_popup(winner_name, can_rematch=True)
         
         if play_again:
@@ -978,9 +1099,15 @@ class ModernApp:
         else: self.score_o += 1
         self.update_scores()
         
-        winner_name = self.p1_name if winner_char == PLAYER_X else self.p2_name
+        if self.mode == 'ONLINE' and not self.is_host:
+             if winner_char == PLAYER_X: winner_name = self.p2_name
+             else: winner_name = self.p1_name
+        else:
+             winner_name = self.p1_name if winner_char == PLAYER_X else self.p2_name
+
         self.lbl_status.config(text=f"{winner_name} Won!", fg=COLORS['accent_o'])
         
+        # New: Uses the fancy popup with confetti
         self.show_win_popup(winner_name, can_rematch=False)
 
     def update_scores(self):
@@ -988,7 +1115,8 @@ class ModernApp:
         self.lbl_score_o.config(text=str(self.score_o))
 
     def trigger_restart_confirm(self):
-        if messagebox.askyesno("Restart", "Are you sure?"):
+        # New: Replaces standard messagebox with dark theme styled popup
+        if self.show_styled_confirm_popup("RESTART", "Are you sure you want to restart?"):
             self.trigger_restart()
 
     def trigger_restart(self):
